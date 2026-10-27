@@ -73,8 +73,10 @@ export default function PairingSection() {
         }
       })
       .catch((err) => {
-        if (!stopped) setPhones([])
-        setError(pairingError(err))
+        // The read failing says nothing about the list: an empty one here
+        // would draw "nothing is listening on your network" under the error
+        // that says the read failed, which the daemon never told us.
+        if (!stopped) setError(pairingError(err))
       })
     return () => {
       stopped = true
