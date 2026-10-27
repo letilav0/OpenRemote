@@ -63,16 +63,39 @@ export function pairingApi() {
   }
 }
 
+// The characters `is_invisible` in daemon/crates/openremote-daemon/src/pairing.rs
+// drops from a name before it stores one: the control characters (Cc) and the
+// format characters (Cf), the soft hyphen, the bidi embeddings, overrides and
+// isolates, the zero-width joiners, the byte-order mark. A right-to-left
+// override left in a device name reorders the rest of the row it is drawn in,
+// on the desktop's phone list and on the phone's own page, so both surfaces
+// drop the same set or they disagree about what a name is. Written out as
+// ranges, like the daemon's table, rather than as \p{Cf}: a property depends
+// on the engine's Unicode version and could drift from that table while still
+// looking identical in review.
+//
+// The five whitespace controls (tab, newline, vertical tab, form feed, carriage
+// return) are the one omission, and they are left out on purpose: this console
+// draws those as a single space, which is its one-line rule, while the daemon
+// drops them. A name the daemon stored has already had them dropped, so a name
+// that reaches this function with one in it is not a name the daemon keeps, and
+// the two rules cannot meet on the same name and disagree about it.
+const INVISIBLE = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u00AD\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB\u{110BD}\u{110CD}\u{13430}-\u{1343F}\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0001}\u{E0020}-\u{E007F}]/gu
+
 /**
- * A phone name as this console will show it. The daemon cleans the name it
- * stores (trimmed, one line, at most 40 characters); doing the same here
- * means the list never shows something the daemon would not have kept.
+ * A phone name as this console will show it, mirroring `clean_name`: the
+ * invisible characters stripped, at most 40 characters, then trimmed, then
+ * `Phone` when nothing is left. Stripping rather than replacing is the
+ * daemon's rule too, so a hidden character can never become a visible column
+ * of its own, and the 40 comes before the trim as it does there, so a name of
+ * forty invisibles plus a word keeps the word.
  */
 export function phoneName(raw) {
-  const clean = String(raw ?? '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 40)
+  const stripped = String(raw ?? '').replace(INVISIBLE, '')
+  // Rust counts characters where a JS string counts UTF-16 units, so 40 emoji
+  // is 40 on the daemon and 20 here without the array step.
+  const capped = Array.from(stripped).slice(0, 40).join('')
+  const clean = capped.replace(/\s+/g, ' ').trim()
   return clean || 'Phone'
 }
 

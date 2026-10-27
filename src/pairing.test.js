@@ -36,6 +36,32 @@ test('a phone name is cleaned the way the daemon cleans it', () => {
   assert.equal(phoneName(undefined), 'Phone')
 })
 
+test('a phone name cannot carry a direction override past the list', () => {
+  // The real characters, not escapes of them: a name written from the right
+  // must not reorder the row it is drawn in, and a hidden character must not
+  // become a visible column of its own.
+  assert.equal(phoneName('Pixel\u202E'), 'Pixel')
+  assert.equal(phoneName('\u202E\u200B'), 'Phone')
+  assert.equal(phoneName('Pixel\u200B Phone'), 'Pixel Phone')
+  assert.equal(phoneName('Pixel\u202Eabc'), 'Pixelabc')
+  // A soft hyphen and a zero-width joiner are format characters too, and a
+  // byte-order mark in the middle of a name must go rather than become a
+  // space the way a whitespace character would.
+  assert.equal(phoneName('Pi\u00ADxel\u200D'), 'Pixel')
+  assert.equal(phoneName('Pi\uFEFFxel'), 'Pixel')
+  // Ordinary names are untouched: accented Latin and CJK are not invisible.
+  assert.equal(phoneName('Téléphone de Zoé'), 'Téléphone de Zoé')
+  assert.equal(phoneName('山田のスマホ'), '山田のスマホ')
+  assert.equal(phoneName('Büro Pixel'), 'Büro Pixel')
+  assert.equal(phoneName('电话 Pixel'), '电话 Pixel')
+  // The daemon's two: eighty invisibles after a word leave the word, and
+  // invisibles alone leave nothing, which is the fallback. The cap counts
+  // characters as the daemon does, not UTF-16 units.
+  assert.equal(phoneName(`Pixel${'\u200B'.repeat(80)}`), 'Pixel')
+  assert.equal(phoneName('\u202E\u200B\uFEFF'), 'Phone')
+  assert.equal(Array.from(phoneName('😀'.repeat(60))).length, 40)
+})
+
 test('a failure says what happened, in the words the surface shows', () => {
   const noNetwork = Object.assign(new Error('This computer is not on a network.'), { status: 409 })
   assert.equal(pairingError(noNetwork), 'This computer is not on a network.')
