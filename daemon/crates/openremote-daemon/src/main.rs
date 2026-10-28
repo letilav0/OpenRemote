@@ -208,22 +208,32 @@ async fn serve(agent: bool) -> ExitCode {
             std::process::exit(0);
         });
     } else {
+        // The app's sidecar: the app's browser talks to us over these same
+        // pipes (`BROWSER {json}` lines both ways), so its tools are offered.
+        app.browser.set_hosted();
+        app.browser.connect(browser_sender());
         // The sidecar watchdog: when the shell dies, our stdin closes, and
         // the daemon must not outlive its owner. Same sweep for the same
         // reason - the children belong to this process, not to the shell.
         let app = Arc::clone(&app);
         let dir = data_dir.clone();
         tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            let mut stdin = tokio::io::stdin();
-            let mut scratch = [0u8; 512];
+            use tokio::io::AsyncBufReadExt;
+            let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
             loop {
-                match stdin.read(&mut scratch).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
+                match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        if let Some(message) = openremote_browser::parse(&line) {
+                            app.browser.receive(message);
+                        }
+                    }
+                    // A line that isn't text is skipped; the pipe is still open.
+                    Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {}
+                    Ok(None) | Err(_) => break,
                 }
             }
             eprintln!("openremote-daemon: stdin closed, exiting");
+            app.browser.disconnect();
             app.supervisor.shutdown_all().await;
             openremote_daemon::mcp_chat::remove_port_file(&dir);
             std::process::exit(0);
@@ -248,6 +258,26 @@ async fn serve(agent: bool) -> ExitCode {
     println!("DATA_DIR {}", data_dir.display());
     axum::serve(listener, router).await.expect("serve");
     ExitCode::SUCCESS
+}
+
+/// Calls to the app's browser, one line each on stdout (beside READY and
+/// DATA_DIR; every log goes to stderr). Written from a thread of its own,
+/// so a slow reader at the other end never holds up the daemon's work.
+fn browser_sender() -> openremote_daemon::browser::Sender {
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        use std::io::Write;
+        let stdout = std::io::stdout();
+        for line in rx {
+            let mut out = stdout.lock();
+            if writeln!(out, "{line}").and_then(|()| out.flush()).is_err() {
+                return;
+            }
+        }
+    });
+    Arc::new(move |message| {
+        let _ = tx.send(openremote_browser::line(&message));
+    })
 }
 
 async fn shutdown_signal() {

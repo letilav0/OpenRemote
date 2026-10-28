@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
+use openremote_browser::Controller;
 use serde::{Deserialize, Serialize};
 use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{
@@ -22,6 +24,8 @@ use tauri::{
     WebviewUrl,
 };
 
+mod agent;
+pub mod pipe;
 #[cfg(all(windows, debug_assertions))]
 pub mod selftest;
 #[cfg(windows)]
@@ -37,7 +41,13 @@ static DOWNLOADS: AtomicU64 = AtomicU64::new(0);
 pub struct Browser {
     next: AtomicU64,
     tabs: Mutex<HashMap<String, Tab>>,
+    /// Where the console last put a page: an agent's new tab takes its size.
+    last_bounds: Mutex<Option<Bounds>>,
 }
+
+/// A tab nobody has looked at for this long sleeps (background tabs cost
+/// nothing), unless an agent holds it.
+const SLEEP_AFTER: Duration = Duration::from_secs(5 * 60);
 
 /// What the console is told about a tab.
 #[derive(Clone, Debug, Default, Serialize)]
@@ -53,88 +63,39 @@ pub struct Tab {
     /// The tab that opened this one (a link with target=_blank or
     /// window.open), so the console can place it beside its opener.
     pub opener: Option<String>,
+    /// Who holds the tab besides the user: a chat's agent, or the user who
+    /// took it over from one (the tab strip's badge).
+    pub controller: Option<Controller>,
+    /// A private tab: a throwaway profile, no history, hidden from agents.
+    pub private: bool,
+    /// A private tab the user handed to agents.
+    pub shared: bool,
+    /// The page is showing something fullscreen (a video).
+    pub fullscreen: bool,
     #[serde(skip)]
     bounds: Option<Bounds>,
+    /// The console is showing it.
+    #[serde(skip)]
+    pub shown: bool,
+    /// Drawn off screen for an agent while the console shows another tab,
+    /// so its pictures and layout stay real.
+    #[serde(skip)]
+    pub parked: bool,
+    #[serde(skip)]
+    pub suspended: bool,
+    #[serde(skip)]
+    pub hidden_since: Option<Instant>,
 }
 
-/// A download a tab asked for, as the console lists it.
+/// A download a tab started, as the console lists it.
 #[derive(Clone, Debug, Serialize)]
 pub struct Download {
     pub id: u64,
     pub tab: String,
     pub url: String,
     pub path: Option<String>,
-    /// "blocked" (a page asked and was refused), "started", "done" or
-    /// "failed".
+    /// "started", "done" or "failed".
     pub state: &'static str,
-}
-
-/// One tab's download attempts, as the shell reports them.
-///
-/// One attempt is one row in the console's downloads list, and the event
-/// that ends an attempt carries nothing but its address. So an attempt the
-/// handler allows keeps its id here, under its address, and the finish event
-/// lands on the row that attempt already has. Nothing is kept for a refused
-/// attempt: it was reported as blocked when it arrived, nothing was started,
-/// and a completion for it (WebView2 reports the cancellation of an operation
-/// it started and then cancelled) is the engine's own bookkeeping rather than
-/// news about a second download. Dropping it is what keeps one attempt to one
-/// row whether or not that completion ever fires - and the id fallback that
-/// used to make every later attempt rewrite a single row is gone with it.
-#[derive(Default)]
-struct Downloads {
-    started: Vec<(String, u64)>,
-}
-
-impl Downloads {
-    /// The row to report for this event, or none when the event is not news
-    /// about a row the console holds. `id` hands out the next download id,
-    /// and only a request takes one; `answer` is what the handler will tell
-    /// the engine for this event's attempt.
-    fn reported(
-        &mut self,
-        event: &DownloadEvent<'_>,
-        id: impl FnOnce() -> u64,
-        tab: &str,
-        answer: bool,
-    ) -> Option<Download> {
-        match event {
-            DownloadEvent::Requested { url, destination } => {
-                let id = id();
-                if answer {
-                    self.started.push((url.to_string(), id));
-                }
-                Some(Download {
-                    id,
-                    tab: tab.to_string(),
-                    url: url.to_string(),
-                    path: Some(destination.display().to_string()),
-                    state: if answer { "started" } else { "blocked" },
-                })
-            }
-            DownloadEvent::Finished { url, path, success } => {
-                if !answer {
-                    return None;
-                }
-                let url = url.to_string();
-                let at = self.started.iter().rposition(|(u, _)| *u == url);
-                // No started attempt with this address: the console has no
-                // row for it, and inventing one would list a download
-                // nobody asked for.
-                let id = at.map(|at| self.started.remove(at).1)?;
-                Some(Download {
-                    id,
-                    tab: tab.to_string(),
-                    url,
-                    path: path.as_ref().map(|p| p.display().to_string()),
-                    state: if *success { "done" } else { "failed" },
-                })
-            }
-            // The enum is non-exhaustive: an event this shell has never
-            // been told about is not a row, and the answer above stands.
-            _ => None,
-        }
-    }
 }
 
 /// Where the console's placeholder sits, in CSS pixels. The console's
@@ -150,12 +111,6 @@ pub struct Bounds {
 
 /// A browser key pressed while a page had focus: the page never sees it
 /// and the console acts on it (`Mod+T`, the app's own `Mod+K`...).
-///
-/// Built only by the Windows backend, where the WebView2 accelerator handler is what
-/// reports the key; the other two platforms let the console's own listener see it, so
-/// on Linux this type is declared and never constructed, which `-D warnings` reads as
-/// dead code. The allow is that fact, not a silence.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Clone, Debug, Serialize)]
 pub struct KeyPress {
     pub tab: String,
@@ -181,17 +136,6 @@ pub fn allowed(url: &Url, dev: Option<&Url>) -> bool {
     }
 }
 
-/// Whether a page may start a download on its own. It may not. Tauri
-/// reports a download as it arrives and takes the handler's answer as
-/// allow-or-refuse, so there is no way to hold it and ask the user first:
-/// every allowed download is a file written where the user keeps their
-/// own, with nothing on screen to say a page put it there. The console
-/// lists the attempt instead, and the user who wants the file asks for it
-/// in a browser that prompts.
-fn page_may_download() -> bool {
-    false
-}
-
 /// The browser's profile: cookies, storage and cache live here, apart
 /// from the console's own.
 fn profile_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -204,26 +148,35 @@ fn profile_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("browser").join("profile"))
 }
 
-/// The console's webview, for anything the shell has to tell it directly.
+/// The console's own webview, as an event target: the daemon's status and the browser's
+/// news both go there and nowhere else. `pub(crate)` because the sidecar code speaks to
+/// the console through it.
 pub(crate) fn console() -> EventTarget {
     EventTarget::Webview {
         label: CONSOLE.into(),
     }
 }
 
-/// Give the console's webview no engine context menu.
-///
-/// The console is the app's own chrome: every action on it is a control the
-/// console draws, and the engine's menu offers what the app never had. It is
-/// also the webview that must never be talked into a download from a menu
-/// item. Tabs are the other way round: their menu is the only menu a page
-/// has, so they keep it (see `open_tab`). Only Windows' engine has one to
-/// turn off; the other engines are left as they are.
-pub fn no_engine_menu(webview: &Webview) {
-    #[cfg(windows)]
-    win::no_default_menu(webview);
-    #[cfg(not(windows))]
-    let _ = webview;
+/// Where an agent's tab is drawn while the console isn't showing it: off
+/// screen, at the size pages are shown at.
+pub fn parked_bounds(app: &AppHandle) -> Bounds {
+    let last = *app
+        .state::<Browser>()
+        .last_bounds
+        .lock()
+        .expect("browser lock");
+    let size = last.unwrap_or(Bounds {
+        x: 0.0,
+        y: 0.0,
+        width: 1280.0,
+        height: 800.0,
+    });
+    Bounds {
+        x: -30000.0,
+        y: 0.0,
+        width: size.width.max(320.0),
+        height: size.height.max(240.0),
+    }
 }
 
 fn tab(app: &AppHandle, id: &str) -> Result<Webview, String> {
@@ -243,7 +196,36 @@ fn update(app: &AppHandle, id: &str, change: impl FnOnce(&mut Tab)) {
         change(tab);
         tab.clone()
     };
-    let _ = app.emit_to(console(), "browser:tab", snapshot);
+    let _ = app.emit_to(console(), "browser:tab", snapshot.clone());
+    pipe::tab_changed(app, &snapshot);
+}
+
+/// A page went fullscreen (a video's button) or came back: the whole
+/// window follows, and the console hides its chrome.
+pub fn fullscreen_changed(app: &AppHandle, tab: &str, on: bool) {
+    update(app, tab, |t| t.fullscreen = on);
+    if let Some(window) = app.get_window(CONSOLE) {
+        let _ = window.set_fullscreen(on);
+    }
+    let _ = app.emit_to(
+        console(),
+        "browser:fullscreen",
+        serde_json::json!({ "tab": tab, "on": on }),
+    );
+}
+
+/// Close a tab: its page, its record, and what agents knew of it.
+pub fn close_tab(app: &AppHandle, id: &str) -> Result<(), String> {
+    let webview = self::tab(app, id)?;
+    app.state::<Browser>()
+        .tabs
+        .lock()
+        .expect("browser lock")
+        .remove(id);
+    #[cfg(windows)]
+    agent::forget(id);
+    pipe::closed(app, id);
+    webview.close().map_err(|e| e.to_string())
 }
 
 /// Open a tab. It blocks until the window's thread has built the webview
@@ -256,6 +238,7 @@ pub fn open_tab(
     bounds: Bounds,
     show: bool,
     opener: Option<String>,
+    private: bool,
 ) -> Result<String, String> {
     if !allowed(&url, app.config().build.dev_url.as_ref()) {
         return Err(format!("{url} can't be opened here"));
@@ -267,10 +250,8 @@ pub fn open_tab(
     let (on_load, on_title, on_popup, on_download) =
         (app.clone(), app.clone(), app.clone(), app.clone());
     // Downloads are told apart by their address, which is all the finish
-    // event carries: the newest started one with that address finishes. A
-    // download the handler allows is remembered; a refused one is not, and
-    // its completion is not reported (see `Downloads`).
-    let downloads = Mutex::new(Downloads::default());
+    // event carries; the newest started one with that address finishes.
+    let started: std::sync::Arc<Mutex<Vec<(String, u64)>>> = Default::default();
     let popup_from = id.clone();
     let builder = WebviewBuilder::new(&id, WebviewUrl::External(url.clone()))
         .data_directory(profile_dir(&app)?)
@@ -286,10 +267,7 @@ pub fn open_tab(
         .on_document_title_changed(move |webview, title| {
             update(&on_title, webview.label(), |tab| tab.title = title);
         })
-        // A page asking for a new window gets a tab instead. The page stays
-        // hidden until the console says it has the tab: a pane that closed
-        // while the page was being built must not leave it drawn over the
-        // console with no tab strip to close it.
+        // A page asking for a new window gets a tab instead.
         .on_new_window(move |url, _features| {
             let app = on_popup.clone();
             let opener = popup_from.clone();
@@ -301,42 +279,63 @@ pub fn open_tab(
                     .expect("browser lock")
                     .get(&opener)
                     .and_then(|tab| tab.bounds);
+                let private = app
+                    .state::<Browser>()
+                    .tabs
+                    .lock()
+                    .expect("browser lock")
+                    .get(&opener)
+                    .is_some_and(|tab| tab.private);
                 if let Some(bounds) = bounds {
-                    let _ = open_tab(app, url, bounds, false, Some(opener));
+                    // A private tab's popups stay private.
+                    let _ = open_tab(app, url, bounds, true, Some(opener), private);
                 }
             });
             NewWindowResponse::Deny
         })
-        // A page never writes a file on its own. Above where WebView2 would
-        // put it (the user's Downloads folder, a free name) and behind Edge's
-        // own bubble, a download the page starts is a file the user never
-        // agreed to; the event can only be allowed or refused as it arrives,
-        // so there is no way to hold it and ask the user first. It is
-        // refused, and the console is told what the page tried to save.
+        // Downloads land where WebView2 puts them (the user's Downloads
+        // folder, a free name); handling them here keeps Edge's own
+        // download bubble away, and the console lists them instead.
         .on_download(move |webview, event| {
-            let answer = page_may_download();
-            let row = downloads.lock().expect("downloads lock").reported(
-                &event,
-                || DOWNLOADS.fetch_add(1, Ordering::Relaxed) + 1,
-                webview.label(),
-                answer,
-            );
-            if let Some(row) = row {
-                let _ = on_download.emit_to(console(), "browser:download", row);
-            }
-            answer
-        });
-    // A tab keeps the engine's own context menu, and that is a decision
-    // with a cost, not an oversight: it is the only menu a page has (copy,
-    // select all, back and reload all work from it), and the app has no page
-    // menu of its own to replace it with. The engine's menu also offers
-    // "Save page as" and "Print", which write a file without passing through
-    // `on_download` above. Replacing it means handling ContextMenuRequested,
-    // drawing a menu in the console's own webview over a parked page, and
-    // wiring each item to the tab: a real piece of work, and until it exists
-    // the engine's menu is the better one to have. The console's webview has
-    // no such excuse and is turned off (`no_engine_menu`, from the desktop
-    // setup).
+            let download = match event {
+                DownloadEvent::Requested { url, destination } => {
+                    let id = DOWNLOADS.fetch_add(1, Ordering::Relaxed) + 1;
+                    started
+                        .lock()
+                        .expect("downloads lock")
+                        .push((url.to_string(), id));
+                    Download {
+                        id,
+                        tab: webview.label().to_string(),
+                        url: url.to_string(),
+                        path: Some(destination.display().to_string()),
+                        state: "started",
+                    }
+                }
+                DownloadEvent::Finished { url, path, success } => {
+                    let url = url.to_string();
+                    let id = {
+                        let mut started = started.lock().expect("downloads lock");
+                        let at = started.iter().rposition(|(u, _)| *u == url);
+                        at.map(|at| started.remove(at).1).unwrap_or_default()
+                    };
+                    Download {
+                        id,
+                        tab: webview.label().to_string(),
+                        url,
+                        path: path.map(|p| p.display().to_string()),
+                        state: if success { "done" } else { "failed" },
+                    }
+                }
+                _ => return true,
+            };
+            let _ = on_download.emit_to(console(), "browser:download", download.clone());
+            pipe::download(&on_download, &download);
+            true
+        })
+        // A private tab keeps nothing: WebView2's InPrivate, WebKit's
+        // non-persistent data store.
+        .incognito(private);
     #[cfg(windows)]
     let builder = builder.additional_browser_args(win::BROWSER_ARGS);
     browser.tabs.lock().expect("browser lock").insert(
@@ -346,7 +345,10 @@ pub fn open_tab(
             url: url.to_string(),
             loading: true,
             opener: opener.clone(),
+            private,
             bounds: Some(bounds),
+            shown: show,
+            hidden_since: (!show).then(Instant::now),
             ..Tab::default()
         },
     );
@@ -364,7 +366,10 @@ pub fn open_tab(
         let _ = webview.hide();
     }
     #[cfg(windows)]
-    win::attach(&app, &webview);
+    {
+        win::attach(&app, &webview);
+        win::watch_requests(&app, &webview);
+    }
     update(&app, &id, |_| {});
     Ok(id)
 }
@@ -375,55 +380,14 @@ pub async fn browser_open(
     url: String,
     bounds: Bounds,
     show: bool,
+    private: Option<bool>,
 ) -> Result<String, String> {
     let url = Url::parse(&url).map_err(|e| e.to_string())?;
-    open_tab(app, url, bounds, show, None)
-}
-
-/// What this build's shell can actually do with a tab. Find, the DevTools
-/// bridge (element picking and screenshots), device view, printing and
-/// forgetting a site are written against WebView2, so every other build
-/// answers false and the console keeps those controls off its chrome instead
-/// of drawing buttons that fail silently. DevTools ride with the build type
-/// rather than the platform: the command exists in a development build and
-/// nowhere else.
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Features {
-    pub find: bool,
-    /// Screenshots and the DevTools protocol: element picking.
-    pub cdp: bool,
-    /// Device view, which drives the page's emulation over the bridge.
-    pub viewport: bool,
-    pub clear_site: bool,
-    pub print: bool,
-    pub devtools: bool,
-}
-
-#[tauri::command]
-pub fn browser_features() -> Features {
-    #[cfg(windows)]
-    return Features {
-        find: true,
-        cdp: true,
-        viewport: true,
-        clear_site: true,
-        print: true,
-        devtools: cfg!(debug_assertions),
-    };
-    #[cfg(not(windows))]
-    Features {
-        find: false,
-        cdp: false,
-        viewport: false,
-        clear_site: false,
-        // Printing is not a Windows-only feature: wry implements it as the
-        // system's own dialog on WebKitGTK and WKWebView too, and this crate
-        // has the non-Windows arm for it below. Gating it here disabled a
-        // control that works.
-        print: true,
-        devtools: cfg!(debug_assertions),
-    }
+    *app.state::<Browser>()
+        .last_bounds
+        .lock()
+        .expect("browser lock") = Some(bounds);
+    open_tab(app, url, bounds, show, None, private.unwrap_or(false))
 }
 
 /// The tabs the shell holds, oldest first: a console that reloaded takes
@@ -442,27 +406,22 @@ pub fn browser_tabs(browser: State<'_, Browser>) -> Vec<Tab> {
 }
 
 #[tauri::command]
-pub fn browser_close(
-    app: AppHandle,
-    browser: State<'_, Browser>,
-    tab: String,
-) -> Result<(), String> {
-    let webview = self::tab(&app, &tab)?;
-    browser.tabs.lock().expect("browser lock").remove(&tab);
-    webview.close().map_err(|e| e.to_string())
+pub fn browser_close(app: AppHandle, tab: String) -> Result<(), String> {
+    close_tab(&app, &tab)
 }
 
 #[tauri::command]
 pub fn browser_set_bounds(app: AppHandle, tab: String, bounds: Bounds) -> Result<(), String> {
     let webview = self::tab(&app, &tab)?;
-    if let Some(known) = app
-        .state::<Browser>()
-        .tabs
-        .lock()
-        .expect("browser lock")
-        .get_mut(&tab)
-    {
+    let browser = app.state::<Browser>();
+    if let Some(known) = browser.tabs.lock().expect("browser lock").get_mut(&tab) {
         known.bounds = Some(bounds);
+        // The console placed it, so it is no longer parked off screen.
+        known.parked = false;
+    }
+    // Off-screen placements (the console's own picture swap) don't count.
+    if bounds.x > -10000.0 {
+        *browser.last_bounds.lock().expect("browser lock") = Some(bounds);
     }
     webview
         .set_bounds(tauri::Rect {
@@ -475,6 +434,22 @@ pub fn browser_set_bounds(app: AppHandle, tab: String, bounds: Bounds) -> Result
 #[tauri::command]
 pub fn browser_show(app: AppHandle, tab: String, focus: bool) -> Result<(), String> {
     let webview = self::tab(&app, &tab)?;
+    let suspended = {
+        let browser = app.state::<Browser>();
+        let mut tabs = browser.tabs.lock().expect("browser lock");
+        tabs.get_mut(&tab).is_some_and(|t| {
+            t.shown = true;
+            t.parked = false;
+            t.hidden_since = None;
+            std::mem::replace(&mut t.suspended, false)
+        })
+    };
+    #[cfg(windows)]
+    if suspended {
+        let _ = win::resume(&webview);
+    }
+    #[cfg(not(windows))]
+    let _ = suspended;
     webview.show().map_err(|e| e.to_string())?;
     if focus {
         let _ = webview.set_focus();
@@ -484,7 +459,19 @@ pub fn browser_show(app: AppHandle, tab: String, focus: bool) -> Result<(), Stri
 
 #[tauri::command]
 pub fn browser_hide(app: AppHandle, tab: String) -> Result<(), String> {
-    self::tab(&app, &tab)?.hide().map_err(|e| e.to_string())
+    let webview = self::tab(&app, &tab)?;
+    if let Some(t) = app
+        .state::<Browser>()
+        .tabs
+        .lock()
+        .expect("browser lock")
+        .get_mut(&tab)
+    {
+        t.shown = false;
+        t.parked = false;
+        t.hidden_since = Some(Instant::now());
+    }
+    webview.hide().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -522,69 +509,74 @@ pub fn browser_reload(app: AppHandle, tab: String) -> Result<(), String> {
     self::tab(&app, &tab)?.reload().map_err(|e| e.to_string())
 }
 
+/// A part of a page, in its own CSS pixels (relative to what's in view).
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct Clip {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 /// A picture of the tab as it is now, as a data URL: the console shows it
 /// in the tab's place while one of its own menus or dialogs covers the
-/// page (a native webview always draws above the console's HTML).
+/// page (a native webview always draws above the console's HTML), and a
+/// screenshot sent to a chat. `clip` takes a part of what's in view.
 #[tauri::command]
-pub async fn browser_capture(app: AppHandle, tab: String) -> Result<String, String> {
+pub async fn browser_capture(
+    app: AppHandle,
+    tab: String,
+    clip: Option<Clip>,
+) -> Result<String, String> {
     let webview = self::tab(&app, &tab)?;
     #[cfg(windows)]
     {
-        let shot = win::cdp(
-            &webview,
-            "Page.captureScreenshot",
-            serde_json::json!({ "format": "jpeg", "quality": 80 }),
-            Wait::Deadline,
-        )
-        .await?;
+        let mut params = serde_json::json!({ "format": "jpeg", "quality": 80 });
+        if let Some(clip) = clip {
+            // The clip is in the page's coordinates: what's in view plus
+            // how far the page has scrolled.
+            let scrolled = win::cdp(&webview, "Page.getLayoutMetrics", serde_json::json!({}))
+                .await
+                .unwrap_or_default();
+            let (sx, sy) = (
+                scrolled["cssVisualViewport"]["pageX"]
+                    .as_f64()
+                    .unwrap_or(0.0),
+                scrolled["cssVisualViewport"]["pageY"]
+                    .as_f64()
+                    .unwrap_or(0.0),
+            );
+            params["clip"] = serde_json::json!({
+                "x": clip.x + sx, "y": clip.y + sy,
+                "width": clip.width.max(1.0), "height": clip.height.max(1.0), "scale": 1,
+            });
+        }
+        let shot = win::cdp(&webview, "Page.captureScreenshot", params).await?;
         let data = shot["data"].as_str().ok_or("no picture came back")?;
         Ok(format!("data:image/jpeg;base64,{data}"))
     }
     #[cfg(not(windows))]
     {
-        let _ = webview;
+        let _ = (webview, clip);
         Err("not on this platform yet".into())
     }
 }
 
-/// What a DevTools call is waiting for, which is what decides whether it may
-/// ever be given up on. The console sends it with every call. These are two
-/// different questions and not two lengths of one: a page that owes the
-/// console an answer can be declared stuck, but a person aiming at an
-/// element is not stuck, and a pick that ends before they click is a bug.
-#[derive(Clone, Copy, Debug, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Wait {
-    /// The console asked the page a question (a screenshot, a viewport
-    /// change, forgetting a site) and is given up on after a deadline, so a
-    /// stalled page costs one failure instead of the pane.
-    Deadline,
-    /// The console is waiting for the person: an element pick, which ends
-    /// when they click, press Esc or cancel. No deadline applies, because
-    /// how long someone takes to choose is theirs.
-    User,
-}
-
 /// One DevTools protocol call on a tab, in-process: no debugging port is
 /// ever opened, so nothing else on the machine can attach to the browser.
-/// `wait` is how long the console is willing to wait for the answer, and it
-/// is not optional: the shell has two kinds of waiting (a page that owes an
-/// answer, a person who is answering) and every call has to say which one
-/// it is, so neither can quietly become the other.
 #[tauri::command]
 pub async fn browser_cdp(
     app: AppHandle,
     tab: String,
     method: String,
     params: serde_json::Value,
-    wait: Wait,
 ) -> Result<serde_json::Value, String> {
     let webview = self::tab(&app, &tab)?;
     #[cfg(windows)]
-    return win::cdp(&webview, &method, params, wait).await;
+    return win::cdp(&webview, &method, params).await;
     #[cfg(not(windows))]
     {
-        let _ = (webview, method, params, wait);
+        let _ = (webview, method, params);
         Err("not on this platform yet".into())
     }
 }
@@ -669,21 +661,18 @@ pub async fn browser_viewport(
                 &webview,
                 "Emulation.clearDeviceMetricsOverride",
                 serde_json::json!({}),
-                Wait::Deadline,
             )
             .await?;
             win::cdp(
                 &webview,
                 "Emulation.setTouchEmulationEnabled",
                 serde_json::json!({ "enabled": false }),
-                Wait::Deadline,
             )
             .await?;
             win::cdp(
                 &webview,
                 "Emulation.setUserAgentOverride",
                 serde_json::json!({ "userAgent": "" }),
-                Wait::Deadline,
             )
             .await?;
             return Ok(());
@@ -698,25 +687,17 @@ pub async fn browser_viewport(
                 "mobile": mobile,
                 "scale": scale.unwrap_or(1.0).clamp(0.1, 1.0),
             }),
-            Wait::Deadline,
         )
         .await?;
         win::cdp(
             &webview,
             "Emulation.setTouchEmulationEnabled",
             serde_json::json!({ "enabled": mobile, "maxTouchPoints": 5 }),
-            Wait::Deadline,
         )
         .await?;
         let agent = if mobile {
             // The engine's own user agent, as its Android build words it.
-            let found = win::cdp(
-                &webview,
-                "Browser.getVersion",
-                serde_json::json!({}),
-                Wait::Deadline,
-            )
-            .await?;
+            let found = win::cdp(&webview, "Browser.getVersion", serde_json::json!({})).await?;
             phone_agent(found["userAgent"].as_str().unwrap_or_default())
         } else {
             String::new()
@@ -725,7 +706,6 @@ pub async fn browser_viewport(
             &webview,
             "Emulation.setUserAgentOverride",
             serde_json::json!({ "userAgent": agent }),
-            Wait::Deadline,
         )
         .await
         .map(|_| ())
@@ -768,7 +748,6 @@ pub async fn browser_clear_site(app: AppHandle, tab: String) -> Result<(), Strin
             &webview,
             "Storage.clearDataForOrigin",
             serde_json::json!({ "origin": origin, "storageTypes": "all" }),
-            Wait::Deadline,
         )
         .await?;
         webview.reload().map_err(|e| e.to_string())
@@ -817,6 +796,174 @@ pub fn browser_reveal(path: String) -> Result<(), String> {
     shown.map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// The user's answer to a site's permission request (`browser:permission`).
+#[tauri::command]
+pub fn browser_permission(app: AppHandle, tab: String, id: u64, allow: bool) -> Result<(), String> {
+    let webview = self::tab(&app, &tab)?;
+    #[cfg(windows)]
+    return win::answer_permission(&webview, id, allow);
+    #[cfg(not(windows))]
+    {
+        let _ = (webview, id, allow);
+        Err("not on this platform yet".into())
+    }
+}
+
+/// Start or stop the element picker: the element under the pointer is
+/// outlined and a click picks it (`browser:picked`), Esc gives up.
+#[tauri::command]
+pub async fn browser_pick(app: AppHandle, tab: String, on: bool) -> Result<(), String> {
+    let webview = self::tab(&app, &tab)?;
+    #[cfg(windows)]
+    return agent::pick(&app, &webview, on).await;
+    #[cfg(not(windows))]
+    {
+        let _ = (app, webview, on);
+        Err("not on this platform yet".into())
+    }
+}
+
+/// Start or stop a tab's stream of frames (`browser:frame`), for recording.
+#[tauri::command]
+pub async fn browser_screencast(app: AppHandle, tab: String, on: bool) -> Result<(), String> {
+    let webview = self::tab(&app, &tab)?;
+    #[cfg(windows)]
+    return agent::screencast(&app, &webview, on).await;
+    #[cfg(not(windows))]
+    {
+        let _ = (app, webview, on);
+        Err("not on this platform yet".into())
+    }
+}
+
+/// A file the console made (a recording) saved into Downloads under a
+/// name of its own; answers where it landed.
+#[tauri::command]
+pub fn browser_save_file(app: AppHandle, name: String, data: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|_| "the file came through damaged".to_string())?;
+    let dir = app.path().download_dir().map_err(|e| e.to_string())?;
+    // Only a file name: no folders, nothing a name could climb out with.
+    let clean: String = name
+        .chars()
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let clean = clean.trim().trim_start_matches('.').to_string();
+    let clean = if clean.is_empty() {
+        "download".to_string()
+    } else {
+        clean
+    };
+    let (stem, ext) = match clean.rsplit_once('.') {
+        Some((stem, ext)) => (stem.to_string(), format!(".{ext}")),
+        None => (clean.clone(), String::new()),
+    };
+    let mut path = dir.join(&clean);
+    let mut n = 1;
+    while path.exists() {
+        path = dir.join(format!("{stem} ({n}){ext}"));
+        n += 1;
+    }
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
+/// Clear the browser's data for every site: "cookies", "cache",
+/// "storage" or "all". History lives in the daemon and is cleared there.
+#[tauri::command]
+pub async fn browser_clear_data(app: AppHandle, kinds: Vec<String>) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        // Every tab shares the profile, so any page can clear it; with none
+        // open, a blank one is made for the moment.
+        let open = app
+            .state::<Browser>()
+            .tabs
+            .lock()
+            .expect("browser lock")
+            .values()
+            .find(|t| !t.private)
+            .map(|t| t.id.clone());
+        let (id, temporary) = match open {
+            Some(id) => (id, false),
+            None => {
+                let maker = app.clone();
+                let blank = Url::parse("about:blank").expect("a fixed address");
+                let bounds = parked_bounds(&app);
+                let id = tauri::async_runtime::spawn_blocking(move || {
+                    open_tab(maker, blank, bounds, false, None, false)
+                })
+                .await
+                .map_err(|e| e.to_string())??;
+                (id, true)
+            }
+        };
+        let result = win::clear_data(&self::tab(&app, &id)?, &kinds).await;
+        if temporary {
+            let _ = close_tab(&app, &id);
+        }
+        result
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, kinds);
+        Err("not on this platform yet".into())
+    }
+}
+
+/// A private tab handed to agents, or taken back (agents see private tabs
+/// only while they're handed over; such tabs never reach history).
+#[tauri::command]
+pub fn browser_share(app: AppHandle, tab: String, on: bool) -> Result<(), String> {
+    self::tab(&app, &tab)?;
+    update(&app, &tab, |t| t.shared = on && t.private);
+    Ok(())
+}
+
+/// Let tabs nobody has looked at for a while sleep, unless an agent holds
+/// them or they're drawn for one.
+pub fn start_sweeper(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let sleepy: Vec<String> = {
+                let browser = app.state::<Browser>();
+                let mut tabs = browser.tabs.lock().expect("browser lock");
+                tabs.values_mut()
+                    .filter(|t| {
+                        !t.shown
+                            && !t.parked
+                            && !t.suspended
+                            && t.controller.is_none()
+                            && t.hidden_since
+                                .is_some_and(|since| since.elapsed() > SLEEP_AFTER)
+                    })
+                    .map(|t| {
+                        t.suspended = true;
+                        t.id.clone()
+                    })
+                    .collect()
+            };
+            #[cfg(windows)]
+            for id in sleepy {
+                if let Ok(webview) = self::tab(&app, &id) {
+                    let _ = win::suspend(&webview);
+                }
+            }
+            #[cfg(not(windows))]
+            let _ = sleepy;
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -861,103 +1008,6 @@ mod tests {
         assert!(allowed(&url("http://127.0.0.1:5175/"), None));
     }
 
-    /// A request for `url`, as the engine reports it. The destination is
-    /// where the file would have gone, which the console shows as the name.
-    fn requested<'a>(url: &str, destination: &'a mut PathBuf) -> DownloadEvent<'a> {
-        DownloadEvent::Requested {
-            url: Url::parse(url).unwrap(),
-            destination,
-        }
-    }
-
-    fn finished(url: &str, success: bool) -> DownloadEvent<'static> {
-        DownloadEvent::Finished {
-            url: Url::parse(url).unwrap(),
-            path: None,
-            success,
-        }
-    }
-
-    /// A page must never be able to write a file into the user's Downloads
-    /// folder by asking. One attempt is one row in the console's list: the
-    /// attempt is reported as blocked, and the completion the engine may
-    /// report for the operation it cancelled is not a second download. This
-    /// pins the policy and the reporting together, so neither can drift.
-    #[test]
-    fn a_refused_download_is_one_row_whether_or_not_it_reports_a_finish() {
-        let answer = page_may_download();
-        let mut where_to = PathBuf::from("C:\\Users\\me\\Downloads\\a.zip");
-        let mut downloads = Downloads::default();
-        let attempt = downloads
-            .reported(
-                &requested("https://x.test/a.zip", &mut where_to),
-                || 1,
-                "tab-1",
-                answer,
-            )
-            .expect("a request is reported");
-        assert_eq!(
-            (attempt.id, attempt.state, attempt.path.as_deref()),
-            (1, "blocked", Some("C:\\Users\\me\\Downloads\\a.zip"))
-        );
-        assert!(
-            downloads
-                .reported(
-                    &finished("https://x.test/a.zip", false),
-                    || 2,
-                    "tab-1",
-                    answer
-                )
-                .is_none(),
-            "a refused attempt's completion is not a second row"
-        );
-        // A second attempt is its own row, with its own id, rather than a
-        // rewrite of the first one.
-        let mut again_to = PathBuf::from("C:\\Users\\me\\Downloads\\b.zip");
-        let again = downloads
-            .reported(
-                &requested("https://x.test/b.zip", &mut again_to),
-                || 3,
-                "tab-1",
-                answer,
-            )
-            .expect("a request is reported");
-        assert_eq!((again.id, again.state), (3, "blocked"));
-    }
-
-    /// A download the handler allows finishes the row its own request
-    /// opened: the finish event carries the address and nothing else, and an
-    /// id of its own would be a second row for one download. This is the
-    /// path a build that lets the user ask for a file will take.
-    #[test]
-    fn an_allowed_download_finishes_the_row_its_request_opened() {
-        let mut where_to = PathBuf::from("C:\\Users\\me\\Downloads\\a.zip");
-        let mut downloads = Downloads::default();
-        let started = downloads
-            .reported(
-                &requested("https://x.test/a.zip", &mut where_to),
-                || 7,
-                "tab-1",
-                true,
-            )
-            .expect("a request is reported");
-        assert_eq!((started.id, started.state), (7, "started"));
-        let done = downloads
-            .reported(&finished("https://x.test/a.zip", true), || 8, "tab-1", true)
-            .expect("the finish of a started attempt is reported");
-        assert_eq!((done.id, done.state), (7, "done"));
-        // Nothing was started at this address, so there is no row to finish
-        // and no row is invented for it.
-        assert!(downloads
-            .reported(
-                &finished("https://x.test/other.zip", true),
-                || 9,
-                "tab-1",
-                true
-            )
-            .is_none());
-    }
-
     #[test]
     fn device_view_speaks_as_the_engines_android_build() {
         let desktop = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0";
@@ -967,48 +1017,54 @@ mod tests {
         );
         assert_eq!(phone_agent("odd"), "");
     }
+}
 
-    /// The console decides what to draw from this, so the keys are the
-    /// contract: one per control it can offer. A build that cannot do a
-    /// feature must not claim it, or the console draws a control that fails
-    /// silently - which is the whole point of asking the shell.
-    #[test]
-    fn this_build_says_which_browser_features_it_has() {
-        let json = serde_json::to_value(browser_features()).unwrap();
-        let mut keys: Vec<String> = json
-            .as_object()
-            .expect("an object of features")
-            .keys()
-            .cloned()
-            .collect();
-        keys.sort();
-        assert_eq!(
-            keys,
-            ["cdp", "clearSite", "devtools", "find", "print", "viewport"]
-        );
-        if !cfg!(windows) {
-            // Printing is deliberately not in this list: wry has a real print
-            // on every platform, so the flag stays true where these four are
-            // false.
-            for key in ["find", "cdp", "viewport", "clearSite"] {
-                assert_eq!(json[key], serde_json::Value::Bool(false), "{key}");
-            }
-        }
-    }
+/// What this build's browser can actually do, so the console offers only controls that
+/// work here. Ported from the console-side line: the browser work moved the module, the
+/// question did not change.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct Features {
+    pub find: bool,
+    /// Screenshots and the DevTools protocol: element picking.
+    pub cdp: bool,
+    /// Device view, which drives the page's emulation over the bridge.
+    pub viewport: bool,
+    pub clear_site: bool,
+    pub print: bool,
+    pub devtools: bool,
+}
 
-    /// The console sends one of these two strings with every DevTools call.
-    /// The variants are what the shell branches on, so a rename on either
-    /// side has to fail here: a wrong answer makes every element pick a
-    /// deadline, which cancels the pick the user is still aiming at.
-    #[test]
-    fn the_console_wait_strings_are_this_builds_wait_variants() {
-        assert!(matches!(
-            serde_json::from_value::<Wait>(serde_json::json!("user")),
-            Ok(Wait::User)
-        ));
-        assert!(matches!(
-            serde_json::from_value::<Wait>(serde_json::json!("deadline")),
-            Ok(Wait::Deadline)
-        ));
+#[tauri::command]
+pub fn browser_features() -> Features {
+    #[cfg(windows)]
+    return Features {
+        find: true,
+        cdp: true,
+        viewport: true,
+        clear_site: true,
+        print: true,
+        devtools: cfg!(debug_assertions),
+    };
+    #[cfg(not(windows))]
+    Features {
+        find: false,
+        cdp: false,
+        viewport: false,
+        clear_site: false,
+        // Printing is not a Windows-only feature: wry implements it as the
+        // system's own dialog on WebKitGTK and WKWebView too, and this crate
+        // has the non-Windows arm for it below. Gating it here disabled a
+        // control that works.
+        print: true,
+        devtools: cfg!(debug_assertions),
     }
+}
+
+/// Keep the engine's own context menu out of a tab: the console draws the browser's
+/// chrome, and a right-click menu from WebView2 would be a second one.
+pub fn no_engine_menu(webview: &Webview) {
+    #[cfg(windows)]
+    win::no_default_menu(webview);
+    #[cfg(not(windows))]
+    let _ = webview;
 }

@@ -775,6 +775,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "openremote-browser"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "openremote-claude"
 version = "0.4.0"
 dependencies = [
@@ -845,6 +853,7 @@ dependencies = [
  "futures-util",
  "libc",
  "openremote-agy",
+ "openremote-browser",
  "openremote-claude",
  "openremote-cloud",
  "openremote-codex",

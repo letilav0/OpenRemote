@@ -30,6 +30,12 @@ const COMMANDS: &[&str] = &[
     "browser_clear_site",
     "browser_open_external",
     "browser_reveal",
+    "browser_permission",
+    "browser_pick",
+    "browser_screencast",
+    "browser_save_file",
+    "browser_clear_data",
+    "browser_share",
 ];
 
 fn main() {

@@ -51,6 +51,9 @@ pub struct CommandEntry {
     pub aliases: Vec<String>,
     /// `harness` (its own) or `plugin` (an installed plugin's).
     pub source: &'static str,
+    /// `command` or `skill`: a harness lists the user's whole skill library
+    /// beside its commands, and the / menu keeps the two apart.
+    pub kind: &'static str,
     /// The plugin's id, for a plugin's command.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
@@ -136,6 +139,17 @@ impl Supervisor {
             });
         }
         servers
+    }
+
+    /// The tools a chat runs without asking: OpenRemote's browser tools
+    /// that only read (reading, hovering, scrolling, switching tabs), named
+    /// as its MCP server's tools.
+    pub(super) fn allowed_tools(&self) -> Vec<String> {
+        if self.controls.get().is_some() {
+            crate::browser::tools::reading_tool_names("openremote")
+        } else {
+            Vec::new()
+        }
     }
 
     /// What `/` and `@` offer for a chat on `harness` in `workspace`.
@@ -240,6 +254,7 @@ impl Supervisor {
             &folders,
             settings_servers,
             error,
+            &local_skills(&cwd),
         ))
     }
 
@@ -363,6 +378,28 @@ impl Supervisor {
     }
 }
 
+/// The skills a harness lists as commands, by folder name: the user's own
+/// (`~/.claude/skills`) and the project's (`.claude/skills`). Plugins'
+/// skills are known from their own folders.
+fn local_skills(cwd: &std::path::Path) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    let roots = [
+        Supervisor::home_dir().join(".claude").join("skills"),
+        cwd.join(".claude").join("skills"),
+    ];
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.path().join("SKILL.md").is_file() {
+                found.insert(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    found
+}
+
 /// The / and @ lists: the harness's own entries (a plugin's when its name
 /// carries an installed plugin's prefix), then each enabled plugin's own
 /// parts the harness didn't list - dimmed where the harness runs no
@@ -374,7 +411,34 @@ fn build_view(
     folders: &[(String, PathBuf, String)],
     settings_servers: Vec<String>,
     error: Option<String>,
+    skills: &BTreeSet<String>,
 ) -> CommandsView {
+    // Every plugin's own parts, read once: which of its names are skills.
+    let parts: Vec<(String, crate::plugins::PluginParts)> = folders
+        .iter()
+        .map(|(id, dir, prefix)| (id.clone(), crate::plugins::plugin_parts(dir, prefix)))
+        .collect();
+    let plugin_skills: BTreeSet<&str> = parts
+        .iter()
+        .flat_map(|(_, p)| p.skills.iter().map(String::as_str))
+        .collect();
+    let plugin_commands: BTreeSet<&str> = parts
+        .iter()
+        .flat_map(|(_, p)| p.commands.iter().map(|c| c.name.as_str()))
+        .filter(|n| !plugin_skills.contains(n))
+        .collect();
+    // A plugin-scoped name the harness lists from a plugin of its own is a
+    // skill unless an installed plugin says it's a command file.
+    let kind = |name: &str| {
+        if skills.contains(name)
+            || plugin_skills.contains(name)
+            || (name.contains(':') && !plugin_commands.contains(name))
+        {
+            "skill"
+        } else {
+            "command"
+        }
+    };
     let owner = |name: &str| {
         folders
             .iter()
@@ -393,6 +457,7 @@ fn build_view(
             } else {
                 "harness"
             },
+            kind: kind(&c.name),
             plugin,
             available: true,
             why: None,
@@ -429,12 +494,16 @@ fn build_view(
             plugin: None,
         })
         .collect();
-    for (id, dir, prefix) in folders {
-        let parts = crate::plugins::plugin_parts(dir, prefix);
+    for (id, parts) in parts {
         for c in parts.commands {
             if seen_commands.insert(c.name.clone()) {
                 commands.push(CommandEntry {
                     source: "plugin",
+                    kind: if parts.skills.contains(&c.name) {
+                        "skill"
+                    } else {
+                        "command"
+                    },
                     plugin: Some(id.clone()),
                     available: runs_plugins,
                     why: unavailable.clone(),
@@ -582,6 +651,7 @@ mod tests {
             &folders,
             vec!["docs@m".into()],
             None,
+            &BTreeSet::new(),
         );
         let by = |n: &str| view.commands.iter().find(|c| c.name == n).unwrap();
         assert_eq!(by("compact").source, "harness");
@@ -620,6 +690,7 @@ mod tests {
             &folders,
             vec![],
             None,
+            &BTreeSet::new(),
         );
         let jot = dimmed
             .commands

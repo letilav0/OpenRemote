@@ -70,6 +70,30 @@ struct Sidecar {
     exited: Arc<AtomicBool>,
 }
 
+/// Lines for the daemon's stdin (the built-in browser's news and answers),
+/// written in order by one thread so a busy pipe never holds up the window.
+static TO_DAEMON: std::sync::OnceLock<std::sync::mpsc::Sender<String>> = std::sync::OnceLock::new();
+
+/// Send one line to the running daemon; dropped when none runs (the next
+/// daemon hears everything again in its hello).
+pub fn write_to_daemon(app: &tauri::AppHandle, line: &str) {
+    let tx = TO_DAEMON.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let app = app.clone();
+        std::thread::spawn(move || {
+            for line in rx {
+                let sidecar = app.state::<Sidecar>();
+                let mut slot = sidecar.child.lock().expect("daemon state lock");
+                if let Some(child) = slot.as_mut() {
+                    let _ = child.write(format!("{line}\n").as_bytes());
+                }
+            }
+        });
+        tx
+    });
+    let _ = tx.send(line.to_string());
+}
+
 /// Restart the daemon sidecar: close the old daemon's stdin so it stops
 /// itself, wait a bounded moment, then spawn a fresh one.
 ///
@@ -220,7 +244,16 @@ pub fn run() {
             browser::browser_viewport,
             browser::browser_clear_site,
             browser::browser_open_external,
-            browser::browser_reveal
+            browser::browser_reveal,
+            // The browser's surface grew with the daemon-side work: a page's permission
+            // prompt, the element picker, a tab's frames, saving a file into Downloads,
+            // clearing the profile, and handing a private tab over to agents.
+            browser::browser_permission,
+            browser::browser_pick,
+            browser::browser_screencast,
+            browser::browser_save_file,
+            browser::browser_clear_data,
+            browser::browser_share
         ])
         .setup(|app| {
             // Before the first paint: fit the window to the screen it is on
@@ -247,6 +280,9 @@ pub fn run() {
             tray::load(app.handle());
             tray::apply(app.handle());
             spawn_daemon(app.handle().clone());
+            // A tab nobody has looked at for five minutes is suspended: it keeps its page
+            // and its place, and stops costing memory and battery while hidden.
+            browser::start_sweeper(app.handle().clone());
             Ok(())
         })
         // Where the window is, after the user moves or resizes it. The close
@@ -342,6 +378,12 @@ fn spawn_daemon(app: tauri::AppHandle) {
                     CommandEvent::Terminated(payload) => exit = payload.code,
                     CommandEvent::Stdout(line) => {
                         let line = String::from_utf8_lossy(&line).trim().to_string();
+                        // The daemon's calls to the built-in browser share this pipe, so a
+                        // line meant for the browser is taken here and never parsed as a
+                        // daemon announcement.
+                        if browser::pipe::receive(&app, &line) {
+                            continue;
+                        }
                         if let Some(addr) = line.strip_prefix("READY ") {
                             info.url = Some(format!("http://{addr}"));
                         } else if let Some(dir) = line.strip_prefix("DATA_DIR ") {
@@ -350,6 +392,8 @@ fn spawn_daemon(app: tauri::AppHandle) {
                         if info.url.is_some() && info.data_dir.is_some() && !published {
                             publish(&app, &mut info);
                             published = true;
+                            // A new daemon learns about the browser and its tabs.
+                            browser::pipe::hello(&app);
                         }
                     }
                     CommandEvent::Stderr(bytes) => keep_lines(&mut said, &bytes),

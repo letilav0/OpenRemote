@@ -1311,6 +1311,7 @@ impl Supervisor {
             fast: current.fast,
             mcp_servers: self.mcp_servers_for(&id),
             plugin_dirs: self.plugin_dirs(),
+            allowed_tools: self.allowed_tools(),
         };
         match backend.spawn(opts).await {
             Ok((driver, rx)) => {
@@ -1902,6 +1903,7 @@ impl Supervisor {
             fast: session.fast,
             mcp_servers: self.mcp_servers_for(id),
             plugin_dirs: self.plugin_dirs(),
+            allowed_tools: self.allowed_tools(),
         };
         let (driver, rx) = match backend.spawn(opts).await {
             Ok(pair) => pair,

@@ -24,6 +24,7 @@ openremote-pi = { path = "../openremote-pi" }
 openremote-opencode = { path = "../openremote-opencode" }
 openremote-agy = { path = "../openremote-agy" }
 openremote-cloud = { path = "../openremote-cloud" }
+openremote-browser = { path = "../openremote-browser" }
 # local wall-clock time - the schedule engine fires at the machine's HH:MM
 chrono = "0.4"
 serde = { workspace = true }

@@ -160,6 +160,9 @@ function shortHint(hint = '') {
 
 export function commandKind(c) {
   if (c.name.startsWith('_') || NOISE_WORDS.test(c.description ?? '')) return 'hidden'
+  // The machine knows which are skills (their folders); older daemons
+  // don't say, and the wording tells.
+  if (c.kind === 'skill' || c.kind === 'command') return c.kind
   if (c.name.includes(':') || SKILL_WORDS.test(c.description ?? '')) return 'skill'
   return 'command'
 }

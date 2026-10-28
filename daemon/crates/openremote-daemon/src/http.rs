@@ -47,6 +47,9 @@ pub fn router(app: Arc<App>) -> Router {
         // Linux daemon has no install dir to read - so it serves what it
         // was built with. Console-only: a peer never needs it.
         .route("/notices", get(notices))
+        // The built-in browser: this device's console and its chats' MCP
+        // server only, never another device.
+        .merge(crate::browser::routes::routes())
         // The console reaches another device's API through this one.
         .route(
             "/devices/{id}/{*rest}",
