@@ -22,6 +22,9 @@ test('a phone read that failed leaves the list alone', () => {
 
 test('the empty state waits for a list that arrived', () => {
   const guard = source.indexOf('phones !== null && phones.length === 0')
+  // The sentence inside that guard is "No phones paired." now; the branch that wrote
+  // this pin had "Nothing is listening on your network". The point is the same either
+  // way: the copy sits inside the guard, never under a read that failed.
   const copy = source.indexOf('No phones paired.')
   assert.ok(guard >= 0, 'the empty state is gated on a list the daemon sent')
   assert.ok(copy > guard, 'the empty-state copy sits inside that guard')
