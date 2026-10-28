@@ -68,6 +68,17 @@
   color: #000;
 }
 
+/* The welcome's one action is the same quiet CTA shape as every other,
+   but an outline makes it read as the button it is instead of a line of
+   text sitting in the panel. */
+.ob-cta--outline {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.ob-cta--outline:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
 .ob-code {
   padding: 12px 16px;
   border: 1px solid var(--line);
@@ -145,16 +156,48 @@
   color: var(--text-3);
 }
 
-.ob-progress {
-  display: flex;
-  gap: 6px;
+/* The wizard's footer keeps the dots alone, centered in the panel rather
+   than in whatever space the Back control leaves. */
+.ob-footer {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
   margin-top: 18px;
 }
 
+.ob-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  margin: -20px 0 -6px -8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: default;
+}
+
+.ob-back:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-1);
+}
+
+.ob-progress {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .ob-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
+  width: 9px;
+  height: 7px;
+  border-radius: 9999px;
   background: rgba(255, 255, 255, 0.14);
 }
 
