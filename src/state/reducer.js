@@ -461,7 +461,9 @@ export function foldEvent(chat, event) {
     case 'daemon.error': {
       chat.timeline.push({
         kind: 'message',
-        id: `daemon-${event.seq}`,
+        // `id` when the console wrote this itself (a refusal the stream could not
+        // survive); the daemon's own events carry a seq instead.
+        id: `daemon-${event.id ?? event.seq}`,
         role: 'note',
         text: payload.message,
       })

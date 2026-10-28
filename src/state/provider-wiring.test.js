@@ -83,9 +83,13 @@ test('the stream retry is mirrored for the screen and cleared three ways', () =>
     return source.slice(at, at + size)
   }
   assert.match(window('const apply = (event) => {', 400), /markReconnecting\(id, false\)/, 'an answer clears it')
-  const onClose = window('onClose: (_cursor, err) => {', 1600)
+  const onClose = window('onClose: (_cursor, err) => {', 2400)
   assert.match(onClose, /markReconnecting\(id, true\)/, 'a scheduled retry is shown')
   assert.match(onClose, /if \(sessionGone\(err\)\) \{[\s\S]{0,200}markReconnecting\(id, false\)/, 'a give-up is not shown as a retry')
+  // A refusal no reconnect can fix stops the ladder too, and says why in the transcript
+  // rather than promising a reconnection for ever.
+  assert.match(onClose, /const refused =[\s\S]{0,400}markReconnecting\(id, false\)/, 'a refusal is not shown as a retry')
+  assert.match(onClose, /type: 'daemon\.error'/, 'and it leaves a note')
   assert.match(window('stream.close = () => {', 700), /markReconnecting\(id, false\)/, 'closing clears it')
   // Exposed on the context value and its dependency list.
   assert.match(source, /^\s+reconnecting,$/m)

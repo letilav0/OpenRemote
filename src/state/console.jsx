@@ -670,6 +670,28 @@ export function ConsoleProvider({ children }) {
               markReconnecting(id, false)
               return
             }
+            // A refusal the daemon will keep refusing is not a drop to retry. A rotated
+            // token or a forbid answered every redial in five seconds while the row said
+            // "reconnecting", a word that promises a reconnection that cannot come. 429
+            // is the one 4xx that means "later".
+            const refused =
+              typeof err?.status === 'number' &&
+              err.status >= 400 &&
+              err.status < 500 &&
+              err.status !== 429
+            if (refused) {
+              markReconnecting(id, false)
+              // Written by the console, so it carries its own id and no seq: a
+              // synthesized seq would move the fold cursor and a synthesized `at` would
+              // outrank the poll beat.
+              queueEvent(id, {
+                type: 'daemon.error',
+                id: `refused-${Date.now()}`,
+                seq: null,
+                message: errorCopy(err),
+              })
+              return
+            }
             // The daemon replays everything past the client's fold cursor.
             // The wait doubles on every close in a row, so a daemon that
             // keeps dying is not dialed twice a second forever, and a
