@@ -96,16 +96,16 @@ a:focus,
   flex: none;
   background: var(--bg-side);
   border-right: 1px solid var(--line);
-  /* The slide and the main area's growth ride one clock, on the same
-     standard curve the Machines reveal uses: 280ms of decelerating travel
-     instead of the old 120ms snap, so the panel leaves and arrives
-     gradually rather than jumping out from under the content. */
+  /* One slow clock for the slide and the main area's growth: 450ms on an
+     ease-in-out curve, so the panel accelerates out of rest, carries
+     through the middle and settles back, rather than crossing the window
+     at a constant rate. */
   transition:
-    margin-left 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-    width 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-    margin-right 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    margin-left 0.45s cubic-bezier(0.65, 0, 0.35, 1),
+    width 0.45s cubic-bezier(0.65, 0, 0.35, 1),
+    margin-right 0.45s cubic-bezier(0.65, 0, 0.35, 1),
     visibility 0s;
-  animation: sidebar-in 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  animation: sidebar-in 0.45s cubic-bezier(0.65, 0, 0.35, 1);
 }
 
 /* collapse: the whole sidebar slides out as one unit - contents
@@ -121,10 +121,10 @@ a:focus,
   margin-right: 0;
   visibility: hidden;
   transition:
-    margin-left 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-    width 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-    margin-right 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-    visibility 0s 0.28s;
+    margin-left 0.45s cubic-bezier(0.65, 0, 0.35, 1),
+    width 0.45s cubic-bezier(0.65, 0, 0.35, 1),
+    margin-right 0.45s cubic-bezier(0.65, 0, 0.35, 1),
+    visibility 0s 0.45s;
 }
 
 /* widen only while the search field itself holds focus; any other
@@ -970,8 +970,8 @@ of the list rather than as a banner that arrived from somewhere else. */
     width: 264px;
     box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
     transition:
-      transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-      visibility 0.28s;
+      transform 0.45s cubic-bezier(0.65, 0, 0.35, 1),
+      visibility 0.45s;
   }
 
   .sidebar.collapsed {
