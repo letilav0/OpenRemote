@@ -96,11 +96,16 @@ a:focus,
   flex: none;
   background: var(--bg-side);
   border-right: 1px solid var(--line);
+  /* The slide and the main area's growth ride one clock, on the same
+     standard curve the Machines reveal uses: 280ms of decelerating travel
+     instead of the old 120ms snap, so the panel leaves and arrives
+     gradually rather than jumping out from under the content. */
   transition:
-    margin-left 0.12s cubic-bezier(0.2, 0, 0, 1),
-    width 0.18s ease,
-    margin-right 0.18s ease,
+    margin-left 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    margin-right 0.28s cubic-bezier(0.4, 0, 0.2, 1),
     visibility 0s;
+  animation: sidebar-in 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* collapse: the whole sidebar slides out as one unit - contents
@@ -116,10 +121,10 @@ a:focus,
   margin-right: 0;
   visibility: hidden;
   transition:
-    margin-left 0.12s cubic-bezier(0.2, 0, 0, 1),
-    width 0.18s ease,
-    margin-right 0.18s ease,
-    visibility 0s 0.12s;
+    margin-left 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    margin-right 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    visibility 0s 0.28s;
 }
 
 /* widen only while the search field itself holds focus; any other
@@ -770,7 +775,8 @@ button.side-tile:active {
 
 html[data-reduce-motion] .ab-bar span,
 html[data-reduce-motion] .dv-agent-dot,
-html[data-reduce-motion] .dot--running {
+html[data-reduce-motion] .dot--running,
+html[data-reduce-motion] .sidebar {
   animation: none;
 }
 
@@ -798,16 +804,16 @@ button:focus-visible {
     animation: none;
   }
 
+  .sidebar {
+    animation: none;
+  }
+
   .machines-reveal,
   .machines-reveal > *,
   .sb-project-new,
   .sb-project-remove {
     transition: none;
   }
-}
-
-.sidebar {
-  animation: sidebar-in 0.16s ease-out;
 }
 
 @keyframes sidebar-in {
@@ -963,7 +969,9 @@ of the list rather than as a banner that arrived from somewhere else. */
     z-index: 30;
     width: 264px;
     box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
-    transition: transform 0.18s cubic-bezier(0.2, 0, 0, 1), visibility 0.18s;
+    transition:
+      transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+      visibility 0.28s;
   }
 
   .sidebar.collapsed {
