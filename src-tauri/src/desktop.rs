@@ -244,7 +244,16 @@ pub fn run() {
             browser::browser_viewport,
             browser::browser_clear_site,
             browser::browser_open_external,
-            browser::browser_reveal
+            browser::browser_reveal,
+            // The browser's surface grew with the daemon-side work: a page's permission
+            // prompt, the element picker, a tab's frames, saving a file into Downloads,
+            // clearing the profile, and handing a private tab over to agents.
+            browser::browser_permission,
+            browser::browser_pick,
+            browser::browser_screencast,
+            browser::browser_save_file,
+            browser::browser_clear_data,
+            browser::browser_share
         ])
         .setup(|app| {
             // Before the first paint: fit the window to the screen it is on
@@ -271,6 +280,9 @@ pub fn run() {
             tray::load(app.handle());
             tray::apply(app.handle());
             spawn_daemon(app.handle().clone());
+            // A tab nobody has looked at for five minutes is suspended: it keeps its page
+            // and its place, and stops costing memory and battery while hidden.
+            browser::start_sweeper(app.handle().clone());
             Ok(())
         })
         // Where the window is, after the user moves or resizes it. The close

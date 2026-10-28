@@ -41,17 +41,15 @@ use windows::core::{Interface, BOOL, HSTRING, PWSTR};
 use windows::Win32::System::Com::{IStream, STREAM_SEEK_SET};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
 
-use super::{KeyPress, Wait};
+use super::KeyPress;
 
 /// The tabs' browser arguments. Every tab shares one WebView2 profile, and
 /// WebView2 refuses a second set of arguments for a profile already open,
 /// so every tab passes exactly these. They keep wry's own defaults (no
-/// "mini menu", no PDF mini menu) and add one: a tab keeps running while
-/// the window is hidden in the tray, where agents still browse. SmartScreen
-/// stays on: a page's downloads are refused by the shell, and a file that
-/// does reach the disk from this app is checked for reputation like any
-/// other this machine opens.
-pub const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI \
+/// "mini menu", no PDF mini menu, no SmartScreen) and add one: a tab keeps
+/// running while the window is hidden in the tray, where agents still
+/// browse.
+pub const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
      --disable-backgrounding-occluded-windows";
 
 /// Keys the browser takes while a page has focus, in the console's own
@@ -119,31 +117,6 @@ fn chord(vk: u32) -> Option<String> {
     }
     chord.push_str(&key);
     Some(chord)
-}
-
-/// Turn the engine's own context menu off for one webview.
-///
-/// A page's menu is worth having (copy, select all, back, reload), so tabs
-/// keep it; the console's window is different. Every control that acts on the
-/// console is the app's own, and the engine's menu offers actions the app
-/// never had: "Save page as" writes a file from a page, which is the thing
-/// the browser's download policy exists to prevent in the tabs, and "Reload"
-/// reloads a webview the tab store is tracking. It is also an unthemed,
-/// English, native menu in a window that draws its own chrome. A dev build
-/// loses the menu's Inspect entry; the console's DevTools port (main.rs) is
-/// the inspecting path there, not the menu.
-pub fn no_default_menu(webview: &Webview) {
-    let _ = webview.with_webview(|platform| {
-        // SAFETY: COM calls on the window's thread, where the controller
-        // lives; the settings object is created by the engine for it.
-        unsafe {
-            if let Ok(core) = platform.controller().CoreWebView2() {
-                if let Ok(settings) = core.Settings() {
-                    let _ = settings.SetAreDefaultContextMenusEnabled(false);
-                }
-            }
-        }
-    });
 }
 
 /// Hook a new tab: its browser keys go to the console.
@@ -432,59 +405,13 @@ pub fn print(webview: &Webview) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// How long a DevTools call the console asks a question with waits for the
-/// page to answer. The expression such a call evaluates runs in the page's
-/// own realm, and a page can hold one forever: a dialog open, its own
-/// Promise or timers replaced, a long synchronous task. Without a deadline
-/// the console waits for the life of the tab - the screenshot a menu needs
-/// never arrives and the pane answers nothing again - so these calls get
-/// one. It is the only timer in the module.
-///
-/// It is deliberately not a timer on every call: some calls are not the
-/// console asking the page anything, they are the console waiting for the
-/// person. An element pick is one of those, so it takes no deadline at all
-/// (`Wait::User`): a pick is supposed to last as long as its human, and a
-/// timer that ends it is a bug, not a bound. Both kinds are named by the
-/// caller, so no call can inherit the wrong one by accident.
-const ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// A DevTools call's answer, or why there is none. `wait` is how long the
-/// console is willing to wait, or none when the answer is the person's to
-/// give: then only the page answering or its tab closing ends the wait.
-fn wait_for_answer(
-    answers: std::sync::mpsc::Receiver<Result<String, String>>,
-    wait: Option<std::time::Duration>,
-) -> Result<String, String> {
-    match wait {
-        Some(wait) => match answers.recv_timeout(wait) {
-            Ok(answer) => answer,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                Err("the page did not answer in time".into())
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                Err("the tab did not answer".into())
-            }
-        },
-        None => answers
-            .recv()
-            .map_err(|_| "the tab did not answer".to_string())?,
-    }
-}
-
-/// One DevTools protocol call, answered as JSON. `wait` says which of the
-/// two waits this call gets: a question the console needs an answer to, or
-/// one the person answers in their own time.
+/// One DevTools protocol call, answered as JSON.
 pub async fn cdp(
     webview: &Webview,
     method: &str,
     params: serde_json::Value,
-    wait: Wait,
 ) -> Result<serde_json::Value, String> {
-    let deadline = match wait {
-        Wait::Deadline => Some(ANSWER_WAIT),
-        Wait::User => None,
-    };
-    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<String, String>>();
     let (method, params) = (method.to_string(), params.to_string());
     webview
         .with_webview(move |platform| {
@@ -508,13 +435,9 @@ pub async fn cdp(
             }
         })
         .map_err(|e| e.to_string())?;
-    // Waiting out the deadline parks a thread, so it happens off the async
-    // workers rather than stalling one of them for as long as the page (or
-    // the person) likes.
-    let waited = tauri::async_runtime::spawn_blocking(move || wait_for_answer(rx, deadline))
+    let json = rx
         .await
-        .map_err(|e| e.to_string())?;
-    let json = waited?;
+        .map_err(|_| "the tab did not answer".to_string())??;
     serde_json::from_str(&json).map_err(|e| e.to_string())
 }
 
@@ -802,78 +725,21 @@ pub fn history(webview: &Webview, step: i32) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::mpsc::{channel, Receiver};
-    use std::time::Duration;
-
-    /// A page that never settles the promise it is waiting on leaves the
-    /// call unanswered: the wait has to end by itself, with an error the
-    /// console can show, instead of holding the call until the tab closes.
-    /// The sender stays open here, so this is a deadline and not a closed
-    /// channel.
-    #[test]
-    fn a_page_that_never_answers_is_given_up_on() {
-        let (_tx, rx): (_, Receiver<Result<String, String>>) = channel();
-        assert_eq!(
-            wait_for_answer(rx, Some(Duration::from_millis(20))),
-            Err("the page did not answer in time".to_string())
-        );
-    }
-
-    #[test]
-    fn an_answer_that_comes_back_is_the_answer_itself() {
-        let (tx, rx) = channel();
-        tx.send(Ok("{\"id\":1}".to_string())).unwrap();
-        assert_eq!(
-            wait_for_answer(rx, Some(Duration::from_millis(20))),
-            Ok("{\"id\":1}".to_string())
-        );
-        let (tx, rx) = channel();
-        tx.send(Err("the method is gone".to_string())).unwrap();
-        assert_eq!(
-            wait_for_answer(rx, Some(Duration::from_millis(20))),
-            Err("the method is gone".to_string())
-        );
-    }
-
-    /// A pick is a person aiming, not a page that has stopped answering. The
-    /// same late answer that a timed call gives up on is the answer for a
-    /// pick, because a pick's wait has no deadline to reach - the whole
-    /// point of telling the two waits apart.
-    #[test]
-    fn a_pick_is_waited_out_while_a_question_is_given_up_on() {
-        let (tx, rx) = channel();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(60));
-            let _ = tx.send(Ok("{\"result\":{\"value\":null}}".to_string()));
-        });
-        assert_eq!(
-            wait_for_answer(rx, Some(Duration::from_millis(20))),
-            Err("the page did not answer in time".to_string())
-        );
-        let (tx, rx) = channel();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(60));
-            let _ = tx.send(Ok("{\"result\":{\"value\":null}}".to_string()));
-        });
-        assert_eq!(
-            wait_for_answer(rx, None),
-            Ok("{\"result\":{\"value\":null}}".to_string())
-        );
-    }
-
-    /// A tab that goes away while a pick is waiting still ends the wait: the
-    /// page's answer can never arrive, and the console hears why instead of
-    /// waiting for the rest of the session.
-    #[test]
-    fn a_picks_wait_ends_when_its_tab_goes() {
-        let (tx, rx): (_, Receiver<Result<String, String>>) = channel();
-        drop(tx);
-        assert_eq!(
-            wait_for_answer(rx, None),
-            Err("the tab did not answer".to_string())
-        );
-    }
+/// Keep the engine's own context menu out of a tab: it offers "View source", "Reload"
+/// and "Save as" against the very downloads the browser's policy exists to prevent, it
+/// reloads a webview the tab store is tracking, and it is an unthemed, English, native
+/// menu in a window that draws its own chrome. A dev build loses the menu's Inspect
+/// entry; the console's DevTools port is the inspecting path there.
+pub fn no_default_menu(webview: &Webview) {
+    let _ = webview.with_webview(|platform| {
+        // SAFETY: COM calls on the window's thread, where the controller
+        // lives; the settings object is created by the engine for it.
+        unsafe {
+            if let Ok(core) = platform.controller().CoreWebView2() {
+                if let Ok(settings) = core.Settings() {
+                    let _ = settings.SetAreDefaultContextMenusEnabled(false);
+                }
+            }
+        }
+    });
 }

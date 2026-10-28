@@ -6,7 +6,8 @@
 //! for a chat the user pointed this chat at with @ (the daemon refuses any
 //! other), and for the browser, which the daemon reaches in the app.
 
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
@@ -15,10 +16,26 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 /// The MCP revision this server speaks when the client names none.
 const PROTOCOL: &str = "2025-06-18";
 
+/// The daemon's current port, in its data folder. Written by the daemon with
+/// `fsx::write_private` (owner-only, atomic) and removed on a clean shutdown, the same
+/// treatment the token beside it gets.
+pub const PORT_FILE: &str = "mcp-port";
+
 struct Config {
     session: String,
     port: u16,
     data_dir: PathBuf,
+}
+
+/// Records the port the daemon is serving on, so every running chat's server can find it
+/// after a restart moved it.
+pub fn write_port_file(data_dir: &Path, port: u16) -> io::Result<()> {
+    openremote_core::fsx::write_private(&data_dir.join(PORT_FILE), port.to_string().as_bytes())
+}
+
+/// Removes it on a clean shutdown: the next start writes the next port.
+pub fn remove_port_file(data_dir: &Path) {
+    let _ = std::fs::remove_file(data_dir.join(PORT_FILE));
 }
 
 fn parse(args: &[String]) -> Option<Config> {

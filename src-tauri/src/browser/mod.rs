@@ -148,7 +148,10 @@ fn profile_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("browser").join("profile"))
 }
 
-fn console() -> EventTarget {
+/// The console's own webview, as an event target: the daemon's status and the browser's
+/// news both go there and nowhere else. `pub(crate)` because the sidecar code speaks to
+/// the console through it.
+pub(crate) fn console() -> EventTarget {
     EventTarget::Webview {
         label: CONSOLE.into(),
     }
@@ -1014,4 +1017,54 @@ mod tests {
         );
         assert_eq!(phone_agent("odd"), "");
     }
+}
+
+/// What this build's browser can actually do, so the console offers only controls that
+/// work here. Ported from the console-side line: the browser work moved the module, the
+/// question did not change.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct Features {
+    pub find: bool,
+    /// Screenshots and the DevTools protocol: element picking.
+    pub cdp: bool,
+    /// Device view, which drives the page's emulation over the bridge.
+    pub viewport: bool,
+    pub clear_site: bool,
+    pub print: bool,
+    pub devtools: bool,
+}
+
+#[tauri::command]
+pub fn browser_features() -> Features {
+    #[cfg(windows)]
+    return Features {
+        find: true,
+        cdp: true,
+        viewport: true,
+        clear_site: true,
+        print: true,
+        devtools: cfg!(debug_assertions),
+    };
+    #[cfg(not(windows))]
+    Features {
+        find: false,
+        cdp: false,
+        viewport: false,
+        clear_site: false,
+        // Printing is not a Windows-only feature: wry implements it as the
+        // system's own dialog on WebKitGTK and WKWebView too, and this crate
+        // has the non-Windows arm for it below. Gating it here disabled a
+        // control that works.
+        print: true,
+        devtools: cfg!(debug_assertions),
+    }
+}
+
+/// Keep the engine's own context menu out of a tab: the console draws the browser's
+/// chrome, and a right-click menu from WebView2 would be a second one.
+pub fn no_engine_menu(webview: &Webview) {
+    #[cfg(windows)]
+    win::no_default_menu(webview);
+    #[cfg(not(windows))]
+    let _ = webview;
 }

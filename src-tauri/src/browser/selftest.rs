@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Url, Webview};
 
-use super::{open_tab, win, Bounds, Browser, Wait};
+use super::{open_tab, win, Bounds, Browser};
 
 const PAGE: &str = "data:text/html,<title>selftest</title>\
 <button id=b style='position:fixed;left:40px;top:40px;width:200px;height:60px' \
@@ -36,7 +36,6 @@ async fn eval(tab: &Webview, expr: &str) -> Value {
         tab,
         "Runtime.evaluate",
         json!({ "expression": expr, "awaitPromise": true, "returnByValue": true, "userGesture": true }),
-        Wait::Deadline,
     )
     .await
     {
@@ -61,7 +60,6 @@ async fn click_at(tab: &Webview, x: f64, y: f64) -> Result<(), String> {
             tab,
             "Input.dispatchMouseEvent",
             json!({ "type": kind, "x": x, "y": y, "button": "left", "clickCount": 1 }),
-            Wait::Deadline,
         )
         .await?;
     }
@@ -109,7 +107,6 @@ async fn run(app: &AppHandle) -> Value {
             &tab,
             "Page.captureScreenshot",
             json!({ "format": "jpeg", "quality": 80 }),
-            Wait::Deadline,
         )
         .await
         {
@@ -127,14 +124,7 @@ async fn run(app: &AppHandle) -> Value {
     r.insert("screenshot_base64_bytes".into(), json!(bytes));
 
     // The page as an agent reads it.
-    match win::cdp(
-        &tab,
-        "Accessibility.getFullAXTree",
-        json!({}),
-        Wait::Deadline,
-    )
-    .await
-    {
+    match win::cdp(&tab, "Accessibility.getFullAXTree", json!({})).await {
         Ok(v) => {
             let nodes = v["nodes"].as_array().map_or(0, Vec::len);
             let button = v["nodes"].as_array().is_some_and(|n| {
@@ -158,13 +148,7 @@ async fn run(app: &AppHandle) -> Value {
         json!({ "sent": clicked.is_ok(), "title": eval(&tab, "document.title").await }),
     );
     let _ = click_at(&tab, 100.0, 150.0).await;
-    let _ = win::cdp(
-        &tab,
-        "Input.insertText",
-        json!({ "text": "hello" }),
-        Wait::Deadline,
-    )
-    .await;
+    let _ = win::cdp(&tab, "Input.insertText", json!({ "text": "hello" })).await;
     r.insert(
         "typed".into(),
         eval(&tab, "document.getElementById('i').value").await,
@@ -241,7 +225,6 @@ async fn run(app: &AppHandle) -> Value {
             &tab,
             "Page.captureScreenshot",
             json!({ "format": "jpeg", "quality": 80 }),
-            Wait::Deadline,
         )
         .await;
         r.insert(

@@ -1009,6 +1009,9 @@ mod tests {
             mcp_servers: Vec::new(),
             plugin_dirs: Vec::new(),
             endpoint: None,
+            // The browser's tools ride the chat's MCP server: a chat with none allows
+            // none. This test is about the argv shape, not the grants.
+            allowed_tools: Vec::new(),
         };
         let argv = build_argv(&opts).expect("argv builds");
         let joined = argv
