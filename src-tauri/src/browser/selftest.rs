@@ -78,7 +78,14 @@ async fn run(app: &AppHandle) -> Value {
     };
 
     let t = Instant::now();
-    let id = match open_tab(app.clone(), Url::parse(PAGE).unwrap(), bounds, true, None) {
+    let id = match open_tab(
+        app.clone(),
+        Url::parse(PAGE).unwrap(),
+        bounds,
+        true,
+        None,
+        false,
+    ) {
         Ok(id) => id,
         Err(e) => return json!({ "open_tab": { "error": e } }),
     };
@@ -203,6 +210,7 @@ async fn run(app: &AppHandle) -> Value {
         bounds,
         true,
         None,
+        false,
     ) {
         Ok(site) => {
             let site = app.get_webview(&site).expect("tab just opened");

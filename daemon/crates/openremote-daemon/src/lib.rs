@@ -4,6 +4,7 @@
 //! header check.
 
 pub mod app;
+pub mod browser;
 pub mod cloud_http;
 pub mod embedded;
 pub mod files;

@@ -150,6 +150,10 @@ pub struct SpawnOptions {
     /// Code's own plugin layout. claude loads each with `--plugin-dir`;
     /// the other harnesses get them when plugins reach every harness.
     pub plugin_dirs: Vec<PathBuf>,
+    /// Tools that run without asking, in the harness's own names
+    /// (OpenRemote's browser tools that only read: claude
+    /// `--allowedTools`). A harness that asks for nothing ignores it.
+    pub allowed_tools: Vec<String>,
 }
 
 /// One MCP server a session should start, from an enabled plugin on the

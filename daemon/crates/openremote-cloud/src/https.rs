@@ -104,7 +104,21 @@ impl Http {
         headers: &[(&str, &str)],
         body: Option<(&str, Vec<u8>)>,
     ) -> Result<Response, HttpError> {
-        tokio::time::timeout(REQUEST_TIMEOUT, self.send(method, url, headers, body))
+        self.request_within(REQUEST_TIMEOUT, method, url, headers, body)
+            .await
+    }
+
+    /// A request with its own time limit, for calls known to take longer
+    /// than most (the browser waiting on a page).
+    pub async fn request_within(
+        &self,
+        limit: Duration,
+        method: &str,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: Option<(&str, Vec<u8>)>,
+    ) -> Result<Response, HttpError> {
+        tokio::time::timeout(limit, self.send(method, url, headers, body))
             .await
             .map_err(|_| HttpError::Timeout)?
     }

@@ -10,16 +10,32 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use tauri::{AppHandle, Emitter, Webview};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2, ICoreWebView2Environment15, ICoreWebView2Find, ICoreWebView2_12,
-    ICoreWebView2_15, ICoreWebView2_16, ICoreWebView2_28, COREWEBVIEW2_FAVICON_IMAGE_FORMAT_PNG,
-    COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-    COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN, COREWEBVIEW2_PRINT_DIALOG_KIND_BROWSER,
+    ICoreWebView2, ICoreWebView2Deferral, ICoreWebView2Environment15, ICoreWebView2Find,
+    ICoreWebView2PermissionRequestedEventArgs, ICoreWebView2PermissionRequestedEventArgs3,
+    ICoreWebView2Profile2, ICoreWebView2_12, ICoreWebView2_13, ICoreWebView2_15, ICoreWebView2_16,
+    ICoreWebView2_28, ICoreWebView2_3, COREWEBVIEW2_BROWSING_DATA_KINDS,
+    COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_DOM_STORAGE, COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_PROFILE,
+    COREWEBVIEW2_BROWSING_DATA_KINDS_CACHE_STORAGE, COREWEBVIEW2_BROWSING_DATA_KINDS_COOKIES,
+    COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE, COREWEBVIEW2_BROWSING_DATA_KINDS_SERVICE_WORKERS,
+    COREWEBVIEW2_FAVICON_IMAGE_FORMAT_PNG, COREWEBVIEW2_KEY_EVENT_KIND,
+    COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN, COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
+    COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_CAMERA,
+    COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ, COREWEBVIEW2_PERMISSION_KIND_FILE_READ_WRITE,
+    COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION, COREWEBVIEW2_PERMISSION_KIND_LOCAL_FONTS,
+    COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
+    COREWEBVIEW2_PERMISSION_KIND_MIDI_SYSTEM_EXCLUSIVE_MESSAGES,
+    COREWEBVIEW2_PERMISSION_KIND_MULTIPLE_AUTOMATIC_DOWNLOADS,
+    COREWEBVIEW2_PERMISSION_KIND_NOTIFICATIONS, COREWEBVIEW2_PERMISSION_KIND_WINDOW_MANAGEMENT,
+    COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PERMISSION_STATE_DENY,
+    COREWEBVIEW2_PRINT_DIALOG_KIND_BROWSER,
 };
 use webview2_com::{
     take_pwstr, AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler,
-    FaviconChangedEventHandler, FindActiveMatchIndexChangedEventHandler,
-    FindMatchCountChangedEventHandler, FindStartCompletedHandler, GetFaviconCompletedHandler,
-    HistoryChangedEventHandler, StatusBarTextChangedEventHandler,
+    ClearBrowsingDataCompletedHandler, ContainsFullScreenElementChangedEventHandler,
+    DevToolsProtocolEventReceivedEventHandler, FaviconChangedEventHandler,
+    FindActiveMatchIndexChangedEventHandler, FindMatchCountChangedEventHandler,
+    FindStartCompletedHandler, GetFaviconCompletedHandler, HistoryChangedEventHandler,
+    PermissionRequestedEventHandler, StatusBarTextChangedEventHandler, TrySuspendCompletedHandler,
 };
 use windows::core::{Interface, BOOL, HSTRING, PWSTR};
 use windows::Win32::System::Com::{IStream, STREAM_SEEK_SET};
@@ -500,6 +516,272 @@ pub async fn cdp(
         .map_err(|e| e.to_string())?;
     let json = waited?;
     serde_json::from_str(&json).map_err(|e| e.to_string())
+}
+
+/// Hear one DevTools protocol event of a tab (its domain must be enabled
+/// with a call for most events to flow). Runs `handler` on the window's
+/// thread with the event's parameters.
+pub fn on_event(
+    webview: &Webview,
+    event: &'static str,
+    handler: impl Fn(serde_json::Value) + Send + 'static,
+) -> Result<(), String> {
+    webview
+        .with_webview(move |platform| {
+            // SAFETY: COM calls on the window's thread; the handler owns
+            // what it touches.
+            unsafe {
+                let Ok(core) = platform.controller().CoreWebView2() else {
+                    return;
+                };
+                let Ok(receiver) = core.GetDevToolsProtocolEventReceiver(&HSTRING::from(event))
+                else {
+                    return;
+                };
+                let heard =
+                    DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+                        let Some(args) = args else {
+                            return Ok(());
+                        };
+                        let mut json = PWSTR::null();
+                        args.ParameterObjectAsJson(&mut json)?;
+                        if let Ok(value) = serde_json::from_str(&take_pwstr(json)) {
+                            handler(value);
+                        }
+                        Ok(())
+                    }));
+                let mut token = 0i64;
+                let _ = receiver.add_DevToolsProtocolEventReceived(&heard, &mut token);
+            }
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// A site's request for a permission, waiting for the user's answer. The
+/// request's objects belong to the window's thread, so they wait there.
+struct Asking {
+    args: ICoreWebView2PermissionRequestedEventArgs,
+    deferral: ICoreWebView2Deferral,
+}
+
+thread_local! {
+    static ASKING: std::cell::RefCell<HashMap<u64, Asking>> = std::cell::RefCell::new(HashMap::new());
+}
+
+static ASKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// What a site asked for, in the console's words.
+fn permission_kind(kind: COREWEBVIEW2_PERMISSION_KIND) -> &'static str {
+    match kind {
+        COREWEBVIEW2_PERMISSION_KIND_CAMERA => "camera",
+        COREWEBVIEW2_PERMISSION_KIND_MICROPHONE => "microphone",
+        COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION => "geolocation",
+        COREWEBVIEW2_PERMISSION_KIND_NOTIFICATIONS => "notifications",
+        COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ => "clipboard-read",
+        COREWEBVIEW2_PERMISSION_KIND_MIDI_SYSTEM_EXCLUSIVE_MESSAGES => "midi",
+        COREWEBVIEW2_PERMISSION_KIND_MULTIPLE_AUTOMATIC_DOWNLOADS => "downloads",
+        COREWEBVIEW2_PERMISSION_KIND_LOCAL_FONTS => "fonts",
+        COREWEBVIEW2_PERMISSION_KIND_WINDOW_MANAGEMENT => "window-management",
+        COREWEBVIEW2_PERMISSION_KIND_FILE_READ_WRITE => "files",
+        _ => "other",
+    }
+}
+
+/// A site's permission request, as the console shows it.
+#[derive(Clone, serde::Serialize)]
+pub struct PermissionAsk {
+    pub tab: String,
+    pub id: u64,
+    pub origin: String,
+    pub kind: &'static str,
+    pub label: String,
+}
+
+/// Hook what a page asks of the browser itself: permissions (held until
+/// the user answers in the console; denied when nobody does) and going
+/// fullscreen.
+pub fn watch_requests(app: &AppHandle, webview: &Webview) {
+    let (app, tab) = (app.clone(), webview.label().to_string());
+    let _ = webview.with_webview(move |platform| {
+        // SAFETY: COM calls on the window's thread; each handler owns what
+        // it touches.
+        unsafe {
+            let Ok(core) = platform.controller().CoreWebView2() else {
+                return;
+            };
+            let (a, t) = (app.clone(), tab.clone());
+            let asked = PermissionRequestedEventHandler::create(Box::new(move |_, args| {
+                let Some(args) = args else {
+                    return Ok(());
+                };
+                let mut uri = PWSTR::null();
+                let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                args.Uri(&mut uri)?;
+                args.PermissionKind(&mut kind)?;
+                let uri = take_pwstr(uri);
+                let origin = tauri::Url::parse(&uri)
+                    .map(|u| u.origin().ascii_serialization())
+                    .unwrap_or(uri);
+                // The answer is the user's, per request: WebView2 keeps none.
+                if let Ok(args3) = args.cast::<ICoreWebView2PermissionRequestedEventArgs3>() {
+                    let _ = args3.SetSavesInProfile(false);
+                }
+                let deferral = args.GetDeferral()?;
+                let id = ASKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                ASKING.with(|asking| {
+                    asking.borrow_mut().insert(id, Asking { args, deferral });
+                });
+                let kind = permission_kind(kind);
+                let _ = a.emit_to(
+                    super::console(),
+                    "browser:permission",
+                    PermissionAsk {
+                        tab: t.clone(),
+                        id,
+                        label: origin.clone(),
+                        origin,
+                        kind,
+                    },
+                );
+                // Unanswered requests are refused, so a page never waits
+                // forever on a question nobody saw.
+                let (a, t) = (a.clone(), t.clone());
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    if let Some(webview) = tauri::Manager::get_webview(&a, &t) {
+                        let _ = answer_permission(&webview, id, false);
+                    }
+                });
+                Ok(())
+            }));
+            let mut token = 0i64;
+            let _ = core.add_PermissionRequested(&asked, &mut token);
+
+            let (a, t) = (app.clone(), tab.clone());
+            let fullscreen =
+                ContainsFullScreenElementChangedEventHandler::create(Box::new(move |core, _| {
+                    let Some(core) = core else {
+                        return Ok(());
+                    };
+                    let mut on = BOOL::default();
+                    core.ContainsFullScreenElement(&mut on)?;
+                    let on = on.as_bool();
+                    super::fullscreen_changed(&a, &t, on);
+                    Ok(())
+                }));
+            let _ = core.add_ContainsFullScreenElementChanged(&fullscreen, &mut token);
+        }
+    });
+}
+
+/// The user's answer to a site's permission request.
+pub fn answer_permission(webview: &Webview, id: u64, allow: bool) -> Result<(), String> {
+    webview
+        .with_webview(move |_| {
+            let Some(asking) = ASKING.with(|asking| asking.borrow_mut().remove(&id)) else {
+                return;
+            };
+            let state = if allow {
+                COREWEBVIEW2_PERMISSION_STATE_ALLOW
+            } else {
+                COREWEBVIEW2_PERMISSION_STATE_DENY
+            };
+            // SAFETY: on the window's thread, where the request waits.
+            unsafe {
+                let _ = asking.args.SetState(state);
+                let _ = asking.deferral.Complete();
+            }
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// Let a tab nobody is looking at sleep (its scripts and timers pause and
+/// memory is freed until it's shown or used again).
+pub fn suspend(webview: &Webview) -> Result<(), String> {
+    webview
+        .with_webview(|platform| {
+            // SAFETY: COM calls on the window's thread.
+            unsafe {
+                if let Ok(core) = platform
+                    .controller()
+                    .CoreWebView2()
+                    .and_then(|c| c.cast::<ICoreWebView2_3>())
+                {
+                    let _ = core
+                        .TrySuspend(&TrySuspendCompletedHandler::create(Box::new(|_, _| Ok(()))));
+                }
+            }
+        })
+        .map_err(|e| e.to_string())
+}
+
+pub fn resume(webview: &Webview) -> Result<(), String> {
+    webview
+        .with_webview(|platform| {
+            // SAFETY: COM calls on the window's thread.
+            unsafe {
+                if let Ok(core) = platform
+                    .controller()
+                    .CoreWebView2()
+                    .and_then(|c| c.cast::<ICoreWebView2_3>())
+                {
+                    let _ = core.Resume();
+                }
+            }
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// Clear the browser profile's data (every tab shares it): any of
+/// "cookies", "cache", "storage", or "all".
+pub async fn clear_data(webview: &Webview, kinds: &[String]) -> Result<(), String> {
+    let mut flags = 0i32;
+    for kind in kinds {
+        flags |= match kind.as_str() {
+            "cookies" => COREWEBVIEW2_BROWSING_DATA_KINDS_COOKIES.0,
+            "cache" => {
+                COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE.0
+                    | COREWEBVIEW2_BROWSING_DATA_KINDS_CACHE_STORAGE.0
+            }
+            "storage" => {
+                COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_DOM_STORAGE.0
+                    | COREWEBVIEW2_BROWSING_DATA_KINDS_SERVICE_WORKERS.0
+            }
+            "all" => COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_PROFILE.0,
+            other => return Err(format!("'{other}' is not cookies, cache, storage or all")),
+        };
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+    webview
+        .with_webview(move |platform| {
+            // SAFETY: COM calls on the window's thread; the handler owns the
+            // sender.
+            unsafe {
+                let profile = platform
+                    .controller()
+                    .CoreWebView2()
+                    .and_then(|c| c.cast::<ICoreWebView2_13>())
+                    .and_then(|c| c.Profile())
+                    .and_then(|p| p.cast::<ICoreWebView2Profile2>());
+                match profile {
+                    Ok(profile) => {
+                        let done =
+                            ClearBrowsingDataCompletedHandler::create(Box::new(move |result| {
+                                let _ = tx.send(result.map_err(|e| e.message()));
+                                Ok(())
+                            }));
+                        let _ = profile
+                            .ClearBrowsingData(COREWEBVIEW2_BROWSING_DATA_KINDS(flags), &done);
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e.message()));
+                    }
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    rx.await
+        .map_err(|_| "the browser did not answer".to_string())?
 }
 
 /// Back or forward one page in the tab's own history.

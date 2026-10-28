@@ -28,6 +28,9 @@ pub struct App {
     pub marketplaces: crate::marketplace::MarketplaceHost,
     /// @ file suggestions, a few seconds' listing per workspace.
     pub files: crate::files::FileIndex,
+    /// The built-in browser: the app's tabs, the agents' tools, and the
+    /// browser's own data (bookmarks, history, settings).
+    pub browser: crate::browser::BrowserService,
 }
 
 pub struct AppOptions {
@@ -93,7 +96,9 @@ impl App {
         }
         let plugins = crate::plugins::PluginHost::new(&options.data_dir);
         let marketplaces = crate::marketplace::MarketplaceHost::new(&options.data_dir);
+        let browser = crate::browser::BrowserService::new(&options.data_dir);
         let app = Arc::new(Self {
+            browser,
             token: options.token,
             data_dir: options.data_dir,
             plugins,
@@ -106,6 +111,7 @@ impl App {
             sync: crate::sync::SyncState::default(),
         });
         crate::sync::start_pusher(&app);
+        crate::browser::start_sweeper(&app);
         app.start_cloud();
         app
     }

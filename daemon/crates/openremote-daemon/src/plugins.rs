@@ -330,6 +330,8 @@ fn plugin_dir_checked(
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct PluginParts {
     pub commands: Vec<openremote_harness::CommandDescriptor>,
+    /// Which of `commands` are skills (skills/<name>/SKILL.md).
+    pub skills: Vec<String>,
     pub agents: Vec<openremote_harness::AgentDescriptor>,
     pub mcp_servers: Vec<String>,
 }
@@ -357,6 +359,7 @@ pub fn plugin_parts(dir: &Path, prefix: &str) -> PluginParts {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default()
             });
+            parts.skills.push(format!("{prefix}:{name}"));
             parts.commands.push(openremote_harness::CommandDescriptor {
                 name: format!("{prefix}:{name}"),
                 description: meta.get("description").cloned(),
