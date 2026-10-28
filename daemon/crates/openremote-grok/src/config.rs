@@ -195,7 +195,10 @@ mod tests {
             "Grok Imagine Video 1.5 Lite"
         );
         assert_eq!(
-            pretty_name("grok-4.20-0309-non-reasoning", "grok-4.20-0309-non-reasoning"),
+            pretty_name(
+                "grok-4.20-0309-non-reasoning",
+                "grok-4.20-0309-non-reasoning"
+            ),
             "Grok 4.20 0309 Non Reasoning"
         );
         assert_eq!(pretty_name("grok-4.7", "Grok 4.7"), "Grok 4.7");

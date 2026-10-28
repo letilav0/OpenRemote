@@ -30,11 +30,7 @@ pub(crate) fn resolve_impl(override_path: Option<PathBuf>) -> Resolution {
         push_unique(&mut found, exe);
     }
     let appdata = env::var_os("APPDATA").map(PathBuf::from);
-    for path in candidates(
-        cfg!(windows),
-        home_dir().as_deref(),
-        appdata.as_deref(),
-    ) {
+    for path in candidates(cfg!(windows), home_dir().as_deref(), appdata.as_deref()) {
         push_unique(&mut found, path);
     }
     if let Some(exe) = desktop_cli(local_app_data().as_deref()) {
@@ -140,7 +136,8 @@ pub(crate) fn parse_cli_version(text: &str) -> Option<(u32, u32, u32)> {
             }
             let token = &text[start..i];
             let mut parts = token.split('.');
-            if let (Some(major), Some(minor), Some(patch)) = (parts.next(), parts.next(), parts.next())
+            if let (Some(major), Some(minor), Some(patch)) =
+                (parts.next(), parts.next(), parts.next())
             {
                 if let (Ok(major), Ok(minor), Ok(patch)) =
                     (major.parse(), minor.parse(), patch.parse())
@@ -214,10 +211,7 @@ mod tests {
 
     #[test]
     fn newer_install_wins_and_ties_keep_path() {
-        assert_eq!(
-            prefer_newer(&[Some((1, 19, 3)), Some((2, 1, 2))]),
-            1
-        );
+        assert_eq!(prefer_newer(&[Some((1, 19, 3)), Some((2, 1, 2))]), 1);
         assert_eq!(prefer_newer(&[Some((2, 1, 2)), Some((2, 1, 2))]), 0);
         assert_eq!(prefer_newer(&[None, Some((2, 0, 0))]), 1);
     }

@@ -399,7 +399,8 @@ mod tests {
             token: "test-token".into(),
             data_dir: dir.clone(),
             cloud: openremote_cloud::CloudConfig::from_env(),
-        }).await;
+        })
+        .await;
         let store = crate::supervisor::lock_recovering(&app.store);
         let migrated = store.marketplace(crate::marketplace::OFFICIAL).unwrap();
         assert!(matches!(

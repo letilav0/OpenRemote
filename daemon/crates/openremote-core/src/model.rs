@@ -209,7 +209,9 @@ pub struct EndpointModel {
 pub fn validate_endpoint_harness(harness: &str) -> Result<(), String> {
     match harness {
         "claude" | "codex" | "grok" => Ok(()),
-        _ => Err(format!("custom endpoints support claude, codex, and grok - not '{harness}'")),
+        _ => Err(format!(
+            "custom endpoints support claude, codex, and grok - not '{harness}'"
+        )),
     }
 }
 
@@ -253,9 +255,9 @@ pub fn normalize_endpoint_base_url(raw: &str) -> Result<String, String> {
     if trimmed.chars().any(char::is_control) {
         return Err("the base URL must not contain control characters".to_string());
     }
-    let (scheme, rest) = trimmed.split_once("://").ok_or_else(|| {
-        "use an absolute http:// or https:// base URL".to_string()
-    })?;
+    let (scheme, rest) = trimmed
+        .split_once("://")
+        .ok_or_else(|| "use an absolute http:// or https:// base URL".to_string())?;
     let scheme = scheme.to_ascii_lowercase();
     if scheme != "http" && scheme != "https" {
         return Err("use an absolute http:// or https:// base URL".to_string());

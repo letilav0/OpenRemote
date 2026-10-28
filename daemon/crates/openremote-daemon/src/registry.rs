@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use openremote_core::Harness;
+use openremote_core::model::PermissionWord;
 use openremote_harness::{
     DriverError, DriverEvent, ModelDescriptor, Resolution, SessionSettings, SpawnOptions,
 };
-use openremote_core::model::PermissionWord;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -332,7 +332,8 @@ pub struct HarnessRegistry {
     /// The Node.js pi would run on, by its own `--version` - whether pi's
     /// install needs a runtime set up first.
     node_version: Option<String>,
-}fn harness_from(id: &str, name: &str, resolution: &Resolution, version: Option<&str>) -> Harness {
+}
+fn harness_from(id: &str, name: &str, resolution: &Resolution, version: Option<&str>) -> Harness {
     Harness {
         id: id.to_string(),
         name: name.to_string(),
@@ -564,30 +565,36 @@ fn custom_endpoint_supported(id: &str) -> bool {
 /// renders no picker for them. Each word carries a human label the console
 /// shows instead of the raw CLI flag.
 static CLAUDE_PERMISSION_MODES: std::sync::LazyLock<[PermissionWord; 4]> =
-    std::sync::LazyLock::new(|| [
-        PermissionWord::new("default", "Ask for approval"),
-        PermissionWord::new("acceptEdits", "Apply edits"),
-        PermissionWord::new("bypassPermissions", "Skip approvals"),
-        PermissionWord::new("plan", "Plan only"),
-    ]);
+    std::sync::LazyLock::new(|| {
+        [
+            PermissionWord::new("default", "Ask for approval"),
+            PermissionWord::new("acceptEdits", "Apply edits"),
+            PermissionWord::new("bypassPermissions", "Skip approvals"),
+            PermissionWord::new("plan", "Plan only"),
+        ]
+    });
 
 static CODEX_PERMISSION_MODES: std::sync::LazyLock<[PermissionWord; 4]> =
-    std::sync::LazyLock::new(|| [
-        PermissionWord::new("untrusted", "Ask first"),
-        PermissionWord::new("on-failure", "Ask when it fails"),
-        PermissionWord::new("on-request", "Ask as needed"),
-        PermissionWord::new("never", "Never ask"),
-    ]);
+    std::sync::LazyLock::new(|| {
+        [
+            PermissionWord::new("untrusted", "Ask first"),
+            PermissionWord::new("on-failure", "Ask when it fails"),
+            PermissionWord::new("on-request", "Ask as needed"),
+            PermissionWord::new("never", "Never ask"),
+        ]
+    });
 
 static GROK_PERMISSION_MODES: std::sync::LazyLock<[PermissionWord; 6]> =
-    std::sync::LazyLock::new(|| [
-        PermissionWord::new("default", "Ask for approval"),
-        PermissionWord::new("acceptEdits", "Apply edits"),
-        PermissionWord::new("auto", "Auto-approve"),
-        PermissionWord::new("dontAsk", "Never ask"),
-        PermissionWord::new("bypassPermissions", "Skip approvals"),
-        PermissionWord::new("plan", "Plan only"),
-    ]);
+    std::sync::LazyLock::new(|| {
+        [
+            PermissionWord::new("default", "Ask for approval"),
+            PermissionWord::new("acceptEdits", "Apply edits"),
+            PermissionWord::new("auto", "Auto-approve"),
+            PermissionWord::new("dontAsk", "Never ask"),
+            PermissionWord::new("bypassPermissions", "Skip approvals"),
+            PermissionWord::new("plan", "Plan only"),
+        ]
+    });
 
 /// The word the harness runs when nothing is picked - its own default,
 /// not ours: claude and grok run `default`, codex's app-server thread

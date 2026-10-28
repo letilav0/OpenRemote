@@ -961,9 +961,10 @@ impl Store {
     }
 
     pub fn default_model_endpoint(&self, harness: &str) -> Option<&ModelEndpoint> {
-        self.state.model_endpoints.values().find(|entry| {
-            entry.harness == harness && entry.enabled && entry.is_default
-        })
+        self.state
+            .model_endpoints
+            .values()
+            .find(|entry| entry.harness == harness && entry.enabled && entry.is_default)
     }
 
     /// Resolve the endpoint a chat should use: the named endpoint when
@@ -985,7 +986,8 @@ impl Store {
                 }
                 if !entry.enabled {
                     return Err(StoreError::Conflict(format!(
-                        "endpoint '{}' is off", entry.name
+                        "endpoint '{}' is off",
+                        entry.name
                     )));
                 }
                 Ok(Some(entry))
@@ -1003,7 +1005,9 @@ impl Store {
         mut entry: ModelEndpoint,
     ) -> Result<ModelEndpoint, StoreError> {
         if entry.id.trim().is_empty() {
-            return Err(StoreError::Conflict("a model endpoint needs an id".to_string()));
+            return Err(StoreError::Conflict(
+                "a model endpoint needs an id".to_string(),
+            ));
         }
         crate::model::validate_endpoint_harness(&entry.harness).map_err(StoreError::Conflict)?;
         crate::model::validate_endpoint_name(&entry.name).map_err(StoreError::Conflict)?;
@@ -1024,7 +1028,8 @@ impl Store {
             crate::model::EndpointAuthKind::None => {
                 if entry.key.as_ref().is_some_and(|key| !key.is_empty()) {
                     return Err(StoreError::Conflict(format!(
-                        "endpoint '{}' is keyless - remove its key", entry.name
+                        "endpoint '{}' is keyless - remove its key",
+                        entry.name
                     )));
                 }
                 entry.key = None;
@@ -1032,7 +1037,8 @@ impl Store {
             crate::model::EndpointAuthKind::Bearer | crate::model::EndpointAuthKind::ApiKey => {
                 if entry.key.as_ref().is_none_or(|key| key.is_empty()) {
                     return Err(StoreError::Conflict(format!(
-                        "endpoint '{}' needs a key", entry.name
+                        "endpoint '{}' needs a key",
+                        entry.name
                     )));
                 }
             }
@@ -1044,7 +1050,8 @@ impl Store {
         });
         if duplicate {
             return Err(StoreError::Conflict(format!(
-                "a {} endpoint named '{}' already exists", entry.harness, entry.name
+                "a {} endpoint named '{}' already exists",
+                entry.harness, entry.name
             )));
         }
         if entry.is_default {
@@ -1098,7 +1105,8 @@ impl Store {
             }
             if !entry.enabled {
                 return Err(StoreError::Conflict(format!(
-                    "endpoint '{}' is off - turn it on before making it the default", entry.name
+                    "endpoint '{}' is off - turn it on before making it the default",
+                    entry.name
                 )));
             }
             entry.is_default = true;
@@ -2967,7 +2975,9 @@ mod tests {
     fn endpoint_secret_survives_a_reopen_and_views_stay_redacted() {
         let dir = tempdir();
         let mut store = Store::open(dir.clone()).unwrap();
-        store.put_model_endpoint(endpoint("e-1", "claude", "Office")).unwrap();
+        store
+            .put_model_endpoint(endpoint("e-1", "claude", "Office"))
+            .unwrap();
         drop(store);
         let reopened = Store::open(dir).unwrap();
         let entry = reopened.model_endpoint("e-1").unwrap();
@@ -2979,7 +2989,9 @@ mod tests {
     #[test]
     fn endpoint_defaults_are_exclusive_and_disabled_ones_drop_out() {
         let mut store = Store::open(tempdir()).unwrap();
-        store.put_model_endpoint(endpoint("e-1", "claude", "One")).unwrap();
+        store
+            .put_model_endpoint(endpoint("e-1", "claude", "One"))
+            .unwrap();
         let mut two = endpoint("e-2", "claude", "Two");
         two.is_default = true;
         store.put_model_endpoint(two).unwrap();
@@ -2990,14 +3002,25 @@ mod tests {
         store.set_model_endpoint_enabled("e-2", false).unwrap();
         assert!(store.default_model_endpoint("claude").is_none());
         // A disabled endpoint cannot be named the default.
-        assert!(store.set_model_endpoint_default("claude", Some("e-2")).is_err());
+        assert!(
+            store
+                .set_model_endpoint_default("claude", Some("e-2"))
+                .is_err()
+        );
         store.set_model_endpoint_enabled("e-2", true).unwrap();
-        store.set_model_endpoint_default("claude", Some("e-2")).unwrap();
+        store
+            .set_model_endpoint_default("claude", Some("e-2"))
+            .unwrap();
         assert_eq!(store.default_model_endpoint("claude").unwrap().id, "e-2");
         // Clearing the default leaves the records, resolves none.
         store.set_model_endpoint_default("claude", None).unwrap();
         assert!(store.default_model_endpoint("claude").is_none());
-        assert!(store.resolve_model_endpoint("claude", None).unwrap().is_none());
+        assert!(
+            store
+                .resolve_model_endpoint("claude", None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -3006,13 +3029,31 @@ mod tests {
         let mut one = endpoint("e-1", "claude", "One");
         one.is_default = true;
         store.put_model_endpoint(one).unwrap();
-        store.put_model_endpoint(endpoint("e-2", "claude", "Two")).unwrap();
+        store
+            .put_model_endpoint(endpoint("e-2", "claude", "Two"))
+            .unwrap();
         // Named: the record. Unnamed: the default.
-        assert_eq!(store.resolve_model_endpoint("claude", Some("e-2")).unwrap().unwrap().id, "e-2");
-        assert_eq!(store.resolve_model_endpoint("claude", None).unwrap().unwrap().id, "e-1");
+        assert_eq!(
+            store
+                .resolve_model_endpoint("claude", Some("e-2"))
+                .unwrap()
+                .unwrap()
+                .id,
+            "e-2"
+        );
+        assert_eq!(
+            store
+                .resolve_model_endpoint("claude", None)
+                .unwrap()
+                .unwrap()
+                .id,
+            "e-1"
+        );
         // A record of another harness, and a disabled one, refuse with a
         // conflict - never silently the provider.
-        store.put_model_endpoint(endpoint("e-x", "codex", "X")).unwrap();
+        store
+            .put_model_endpoint(endpoint("e-x", "codex", "X"))
+            .unwrap();
         assert!(store.resolve_model_endpoint("claude", Some("e-x")).is_err());
         store.set_model_endpoint_enabled("e-2", false).unwrap();
         assert!(store.resolve_model_endpoint("claude", Some("e-2")).is_err());
@@ -3026,7 +3067,9 @@ mod tests {
     #[test]
     fn session_endpoints_point_stopped_chats_and_model_ids_are_shape_checked() {
         let mut store = Store::open(tempdir()).unwrap();
-        store.put_model_endpoint(endpoint("e-1", "claude", "One")).unwrap();
+        store
+            .put_model_endpoint(endpoint("e-1", "claude", "One"))
+            .unwrap();
         let mut s = session();
         store
             .append(s.id, EventPayload::SessionCreated { session: s.clone() })
@@ -3035,19 +3078,31 @@ mod tests {
         let updated = store.set_session_endpoint(&s.id, Some("e-1")).unwrap();
         assert_eq!(updated.endpoint_id.as_deref(), Some("e-1"));
         s = updated;
-        assert_eq!(store.session(&s.id).unwrap().endpoint_id.as_deref(), Some("e-1"));
+        assert_eq!(
+            store.session(&s.id).unwrap().endpoint_id.as_deref(),
+            Some("e-1")
+        );
         let cleared = store.set_session_endpoint(&s.id, None).unwrap();
         assert!(cleared.endpoint_id.is_none());
-        assert!(store.set_session_endpoint(&s.id, Some("e-missing")).is_err());
+        assert!(
+            store
+                .set_session_endpoint(&s.id, Some("e-missing"))
+                .is_err()
+        );
         // A custom model id is free text in the harness's own spelling -
         // the only bar is shape.
         store
             .update_session_settings(&s.id, Some("my-custom-model-1".into()), None, None, None)
             .unwrap();
-        assert_eq!(store.session(&s.id).unwrap().model.as_deref(), Some("my-custom-model-1"));
-        assert!(store
-            .update_session_settings(&s.id, Some("bad\nmodel".into()), None, None, None)
-            .is_err());
+        assert_eq!(
+            store.session(&s.id).unwrap().model.as_deref(),
+            Some("my-custom-model-1")
+        );
+        assert!(
+            store
+                .update_session_settings(&s.id, Some("bad\nmodel".into()), None, None, None)
+                .is_err()
+        );
         // Empty means unpicked, never a model named "".
         store
             .update_session_settings(&s.id, Some("   ".into()), None, None, None)

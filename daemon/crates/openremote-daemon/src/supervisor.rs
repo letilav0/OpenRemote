@@ -1212,6 +1212,10 @@ impl Supervisor {
         }))
     }
 
+    // Nine parameters, one per fact a caller decides when it starts a chat. A struct
+    // would be the tidier signature and also a change to every caller and test; the
+    // lint is a style rule, so it is allowed here with the reason rather than silenced.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_session(
         self: &Arc<Self>,
         harness: &str,

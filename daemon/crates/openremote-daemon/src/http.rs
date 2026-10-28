@@ -230,11 +230,11 @@ fn api_routes() -> Router<Arc<App>> {
         .route("/automations/{id}", axum::routing::delete(remove_rule))
         .route("/automations/{id}/enabled", post(set_rule_enabled))
         .route("/automations/{id}/run", post(run_rule))
-        .route("/model-endpoints", get(list_model_endpoints).post(save_model_endpoint))
         .route(
-            "/model-endpoints/default",
-            post(set_default_model_endpoint),
+            "/model-endpoints",
+            get(list_model_endpoints).post(save_model_endpoint),
         )
+        .route("/model-endpoints/default", post(set_default_model_endpoint))
         .route(
             "/model-endpoints/{id}",
             axum::routing::delete(remove_model_endpoint),
@@ -373,10 +373,10 @@ async fn list_model_endpoints(
     }
     let views: Vec<openremote_core::ModelEndpointView> = {
         let store = crate::supervisor::lock_recovering(&app.store);
+        // `view` reads the endpoint by reference, so the iterator's items need no clone.
         store
             .model_endpoints(harness)
             .into_iter()
-            .cloned()
             .map(|e| e.view())
             .collect()
     };
@@ -426,7 +426,12 @@ async fn save_model_endpoint(
             .clone()
             .filter(|id| !id.trim().is_empty())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let key = match body.key.clone().map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
+        let key = match body
+            .key
+            .clone()
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+        {
             Some(secret) => Some(openremote_core::EndpointSecret::new(secret)),
             None => store
                 .model_endpoint(&id)
@@ -532,7 +537,8 @@ async fn set_model_endpoint_enabled(
     if let Some(receipt) = app.supervisor.receipt(&body.request_id) {
         return receipt_response(&receipt);
     }
-    match crate::supervisor::lock_recovering(&app.store).set_model_endpoint_enabled(&id, body.enabled)
+    match crate::supervisor::lock_recovering(&app.store)
+        .set_model_endpoint_enabled(&id, body.enabled)
     {
         Ok(view) => {
             let view = view.view();
@@ -567,7 +573,8 @@ async fn set_default_model_endpoint(
         return receipt_response(&receipt);
     }
     let cleaned = body.id.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    match crate::supervisor::lock_recovering(&app.store).set_model_endpoint_default(&body.harness, cleaned)
+    match crate::supervisor::lock_recovering(&app.store)
+        .set_model_endpoint_default(&body.harness, cleaned)
         .map(|saved| saved.map(|e| e.view()))
     {
         Ok(view) => {
@@ -594,7 +601,9 @@ async fn model_endpoint_models(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
-    let entry = match crate::supervisor::lock_recovering(&app.store).model_endpoint(&id).cloned()
+    let entry = match crate::supervisor::lock_recovering(&app.store)
+        .model_endpoint(&id)
+        .cloned()
     {
         Ok(entry) => entry,
         Err(_) => return error(StatusCode::NOT_FOUND, "no such model endpoint"),
@@ -608,19 +617,21 @@ async fn model_endpoint_models(
 async fn fetch_endpoint_models(
     entry: &openremote_core::ModelEndpoint,
 ) -> Result<Vec<openremote_core::EndpointModel>, String> {
-    let url = openremote_core::model::endpoint_models_url(&entry.base_url, entry.models_path.as_deref())
-        .map_err(|e| format!("endpoint '{}' has a bad listing address: {e}", entry.name))?;
+    let url =
+        openremote_core::model::endpoint_models_url(&entry.base_url, entry.models_path.as_deref())
+            .map_err(|e| format!("endpoint '{}' has a bad listing address: {e}", entry.name))?;
     let mut headers: Vec<(&str, &str)> = Vec::new();
-    let secret: Option<String>;
-    match entry.auth_kind {
-        openremote_core::EndpointAuthKind::None => secret = None,
+    // Assigned once, at the point it is decided: the two arms below always set it, so a
+    // declaration without a value only moved the reader's eye away from that.
+    let secret: Option<String> = match entry.auth_kind {
+        openremote_core::EndpointAuthKind::None => None,
         _ => {
             let Some(key) = entry.key.as_ref().filter(|k| !k.is_empty()) else {
                 return Err(format!("endpoint '{}' needs a key", entry.name));
             };
-            secret = Some(key.expose_secret().to_string());
+            Some(key.expose_secret().to_string())
         }
-    }
+    };
     let owned;
     match (&entry.auth_kind, secret.as_deref()) {
         (openremote_core::EndpointAuthKind::Bearer, Some(key)) => {
@@ -653,8 +664,8 @@ fn parse_models_listing(
     body: &[u8],
     entry: &openremote_core::ModelEndpoint,
 ) -> Result<Vec<openremote_core::EndpointModel>, String> {
-    let value: Value =
-        serde_json::from_slice(body).map_err(|_| format!("endpoint '{}' answered no JSON listing", entry.name))?;
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|_| format!("endpoint '{}' answered no JSON listing", entry.name))?;
     let items: &Vec<Value> = if let Some(data) = value.get("data").and_then(Value::as_array) {
         data
     } else if let Some(models) = value.get("models").and_then(Value::as_array) {
@@ -702,8 +713,12 @@ fn store_error_message(err: &openremote_core::store::StoreError) -> String {
 
 fn store_http_error(err: openremote_core::store::StoreError) -> Response {
     match &err {
-        openremote_core::store::StoreError::NotFound(_) => error(StatusCode::NOT_FOUND, &err.to_string()),
-        openremote_core::store::StoreError::Conflict(_) => error(StatusCode::CONFLICT, &err.to_string()),
+        openremote_core::store::StoreError::NotFound(_) => {
+            error(StatusCode::NOT_FOUND, &err.to_string())
+        }
+        openremote_core::store::StoreError::Conflict(_) => {
+            error(StatusCode::CONFLICT, &err.to_string())
+        }
         _ => error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
     }
 }

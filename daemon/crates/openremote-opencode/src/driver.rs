@@ -407,37 +407,29 @@ fn map_event(event: &Value, session_id: &str) -> Option<DriverEvent> {
         // OpenCode only names its model when a turn runs - the step-start
         // carries it (`model: {id, providerID}`, observed live). The
         // first one lights the chat's model chip before the reply lands.
-        "session.next.step.started" | "session.step.started" => {
-            properties
-                .pointer("/model/id")
-                .and_then(Value::as_str)
-                .map(|model| DriverEvent::ModelReported {
-                    model: model.to_string(),
-                })
-        }
-        "session.next.text.delta" | "session.text.delta" => {
-            properties
-                .get("delta")
-                .and_then(Value::as_str)
-                .map(|text| DriverEvent::TextDelta {
-                    text: text.to_string(),
-                })
-        }
-        "session.next.text.ended" | "session.text.ended" => {
-            properties
-                .get("text")
-                .and_then(Value::as_str)
-                .map(|text| DriverEvent::AssistantText {
-                    text: text.to_string(),
-                })
-        }
-        "session.next.tool.called" | "session.tool.called" => {
-            Some(DriverEvent::ToolStarted {
-                tool_use_id: tool_id(properties),
-                name: tool_name(properties),
-                input: properties.get("input").cloned().unwrap_or(Value::Null),
-            })
-        }
+        "session.next.step.started" | "session.step.started" => properties
+            .pointer("/model/id")
+            .and_then(Value::as_str)
+            .map(|model| DriverEvent::ModelReported {
+                model: model.to_string(),
+            }),
+        "session.next.text.delta" | "session.text.delta" => properties
+            .get("delta")
+            .and_then(Value::as_str)
+            .map(|text| DriverEvent::TextDelta {
+                text: text.to_string(),
+            }),
+        "session.next.text.ended" | "session.text.ended" => properties
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|text| DriverEvent::AssistantText {
+                text: text.to_string(),
+            }),
+        "session.next.tool.called" | "session.tool.called" => Some(DriverEvent::ToolStarted {
+            tool_use_id: tool_id(properties),
+            name: tool_name(properties),
+            input: properties.get("input").cloned().unwrap_or(Value::Null),
+        }),
         "session.next.tool.success"
         | "session.next.tool.failed"
         | "session.tool.success"
@@ -623,7 +615,11 @@ fn event_session(properties: &Value) -> Option<&str> {
     properties
         .get("sessionID")
         .and_then(Value::as_str)
-        .or_else(|| properties.pointer("/form/sessionID").and_then(Value::as_str))
+        .or_else(|| {
+            properties
+                .pointer("/form/sessionID")
+                .and_then(Value::as_str)
+        })
 }
 
 fn tool_id(properties: &Value) -> String {
@@ -681,7 +677,10 @@ fn remember_tool(tools: &Mutex<HashMap<String, String>>, event: &Value) {
         return;
     }
     if let Some(name) = name {
-        tools.lock().expect("tool names").insert(id, name.to_string());
+        tools
+            .lock()
+            .expect("tool names")
+            .insert(id, name.to_string());
     }
 }
 
@@ -731,10 +730,7 @@ fn map_form(properties: &Value) -> Option<DriverEvent> {
                         .get("value")
                         .or_else(|| option.get("label"))
                         .and_then(Value::as_str)?;
-                    let label = option
-                        .get("label")
-                        .and_then(Value::as_str)
-                        .unwrap_or(id);
+                    let label = option.get("label").and_then(Value::as_str).unwrap_or(id);
                     Some(DecisionOption {
                         id: id.to_string(),
                         label: label.to_string(),
@@ -753,10 +749,7 @@ fn map_form(properties: &Value) -> Option<DriverEvent> {
             spec: DecisionSpec {
                 kind: DecisionKind::Question,
                 options,
-                tool_name: form
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .map(String::from),
+                tool_name: form.get("title").and_then(Value::as_str).map(String::from),
                 summary: field
                     .get("title")
                     .or_else(|| field.get("description"))
@@ -878,7 +871,10 @@ mod tests {
         );
         assert!(matches!(
             done,
-            Some(DriverEvent::TurnCompleted { coarse: TurnOutcome::Completed, .. })
+            Some(DriverEvent::TurnCompleted {
+                coarse: TurnOutcome::Completed,
+                ..
+            })
         ));
     }
 
@@ -913,7 +909,10 @@ mod tests {
 
     #[test]
     fn v2_prompt_body_is_flat() {
-        assert_eq!(prompt_body(Wire::V1, "hi"), json!({"prompt": {"text": "hi"}}));
+        assert_eq!(
+            prompt_body(Wire::V1, "hi"),
+            json!({"prompt": {"text": "hi"}})
+        );
         assert_eq!(prompt_body(Wire::V2, "hi"), json!({"text": "hi"}));
     }
 
@@ -934,7 +933,12 @@ mod tests {
         );
         let mapped = map_event(&result, "ses_1").expect("mapped");
         match mapped {
-            DriverEvent::ToolResult { name, text, is_error, .. } => {
+            DriverEvent::ToolResult {
+                name,
+                text,
+                is_error,
+                ..
+            } => {
                 assert_eq!(name, "bash");
                 assert!(!is_error);
                 assert!(text.contains("ok"));
