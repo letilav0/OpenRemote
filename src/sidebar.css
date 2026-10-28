@@ -269,6 +269,7 @@ button.side-tile:active {
   width: 18px;
   height: 18px;
   flex: none;
+  padding: 0;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -400,6 +401,7 @@ button.side-tile:active {
   place-items: center;
   width: 20px;
   height: 20px;
+  padding: 0;
   border: 0;
   border-radius: 5px;
   background: transparent;
@@ -473,6 +475,7 @@ button.side-tile:active {
   place-items: center;
   width: 22px;
   height: 22px;
+  padding: 0;
   border: 0;
   border-radius: 5px;
   background: transparent;
@@ -512,6 +515,7 @@ button.side-tile:active {
   place-items: center;
   width: 22px;
   height: 22px;
+  padding: 0;
   border: 0;
   border-radius: 5px;
   background: transparent;
@@ -1012,6 +1016,7 @@ of the list rather than as a banner that arrived from somewhere else. */
   place-items: center;
   width: 22px;
   height: 22px;
+  padding: 0;
   border: 0;
   border-radius: 5px;
   background: var(--bg-active);
