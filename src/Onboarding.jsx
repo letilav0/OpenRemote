@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { CaretLeft } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import { loadConnection } from './api/daemon.js'
 import HarnessManagerModal from './HarnessManagerModal.jsx'
@@ -95,6 +96,18 @@ export default function Onboarding({ onDone, onDismiss = null, startManual = fal
   const steps = onboardingSteps({ manual, offer: offer.offer })
   const dotOn = stepIndex(steps, step)
 
+  // The ready screen is the wizard's last page, so back means the page
+  // before it in the dots' own list: the install offer while the person
+  // still has one to visit, otherwise the welcome. The quiet setup beat is
+  // never a target - it has no control, and a connected console would land
+  // on it only to be sent straight forward again.
+  const backStep = (() => {
+    for (let i = steps.indexOf('ready') - 1; i >= 0; i -= 1) {
+      if (steps[i] !== 'setup') return steps[i]
+    }
+    return null
+  })()
+
   return (
     <div className="ob">
       <div className="ob-panel">
@@ -105,7 +118,7 @@ export default function Onboarding({ onDone, onDismiss = null, startManual = fal
               Run {ALL_HARNESSES} side by side. Start tasks, follow every session as it
               runs, approve what the agents do, and put routine work on a schedule.
             </p>
-            <button className="ob-cta" onClick={begin}>
+            <button className="ob-cta ob-cta--outline" onClick={begin}>
               Get started
             </button>
           </>
@@ -181,6 +194,12 @@ export default function Onboarding({ onDone, onDismiss = null, startManual = fal
 
         {step === 'ready' && (
           <>
+            {backStep && (
+              <button type="button" className="ob-back" onClick={() => setStep(backStep)}>
+                <CaretLeft size={14} weight="bold" />
+                Back
+              </button>
+            )}
             <h1 className="ob-title">You&apos;re all set</h1>
             <p className="ob-sub">{readyLine(installed, { known: capabilities != null })}</p>
             <div className="ob-harnesses">
@@ -204,10 +223,12 @@ export default function Onboarding({ onDone, onDismiss = null, startManual = fal
           </>
         )}
 
-        <div className="ob-progress">
-          {Array.from({ length: steps.length }, (_, i) => (
-            <span key={i} className={`ob-dot${i <= dotOn ? ' on' : ''}`} />
-          ))}
+        <div className="ob-footer">
+          <div className="ob-progress">
+            {Array.from({ length: steps.length }, (_, i) => (
+              <span key={i} className={`ob-dot${i <= dotOn ? ' on' : ''}`} />
+            ))}
+          </div>
         </div>
       </div>
       {managing && <HarnessManagerModal onClose={() => setManaging(false)} />}

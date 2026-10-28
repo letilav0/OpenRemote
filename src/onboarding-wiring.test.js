@@ -67,3 +67,31 @@ test('the quiet row style exists for the states that are not ready', () => {
   assert.match(css, /\.ob-harness--quiet \{/)
   assert.match(css, /\.ob-harness--quiet \.ob-harness-state \{/)
 })
+
+test('the welcome action is outlined so it reads as a button', () => {
+  const view = source('Onboarding.jsx')
+  assert.match(view, /className="ob-cta ob-cta--outline"/)
+  const css = source('onboarding.css')
+  assert.match(css, /\.ob-cta--outline \{[^}]*border: 1px solid/)
+})
+
+test('the ready screen can step back to the page before it', () => {
+  const view = source('Onboarding.jsx')
+  // Back walks the dots' own list backwards from the ready screen, and the
+  // quiet setup beat is not a target: it has no control and would only send
+  // a connected console forward again.
+  assert.match(view, /const backStep = /)
+  assert.match(view, /steps\.indexOf\('ready'\) - 1/)
+  assert.match(view, /steps\[i\] !== 'setup'/)
+  assert.match(view, /onClick=\{\(\) => setStep\(backStep\)\}/)
+  // The control sits at the top of the ready panel, above its title.
+  const readyAt = view.indexOf("{step === 'ready' && (")
+  const backAt = view.indexOf('className="ob-back"')
+  const titleAt = view.indexOf("You&apos;re all set")
+  assert.ok(readyAt !== -1 && backAt > readyAt && titleAt > backAt)
+  // The dots stay alone in the footer's centered column.
+  const css = source('onboarding.css')
+  assert.match(css, /\.ob-footer \{/)
+  assert.match(css, /\.ob-back \{[^}]*align-self: flex-start/)
+  assert.match(css, /\.ob-progress \{[^}]*grid-column: 2/)
+})
