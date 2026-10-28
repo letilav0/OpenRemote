@@ -16,6 +16,7 @@ import {
 import { useConsole } from './state/console.jsx'
 import { chatAccess, deviceName, signedIn } from './cloud.js'
 import { railItems } from './state/reducer.js'
+import { quietRail, toolHint, workIsLive, workLabel } from './quiet-rail.js'
 import { harnessName } from './harness-names.js'
 import { findModel, modelDisplayName, prettyModelName } from './model-display.js'
 import { modelMaker } from './model-maker.js'
@@ -24,7 +25,8 @@ import { HarnessMark } from './brand-marks.jsx'
 import { editRows, isFileEdit, writeRows } from './diff.js'
 import { isCommandRun } from './command-card.js'
 import { renderMarkdown } from './markdown.js'
-import { capLines, capRows, MAX_RENDER_LINES, MAX_RENDER_ROWS, shouldRenderLive } from './render-budget.js'
+import { bodyPreview, capRows, MAX_RENDER_LINES, MAX_RENDER_ROWS, shouldRenderLive } from './render-budget.js'
+import { jsonCaption, jsonIsLarge, jsonShape, readJson } from './json-card.js'
 import ContextRing from './ContextRing.jsx'
 import PickerMenu from './PickerMenu.jsx'
 import { EndpointManagerModal } from './EndpointManager.jsx'
@@ -75,8 +77,37 @@ function MarkdownBody({ text, live = false, className, tail = '' }) {
   return <p className={className} dangerouslySetInnerHTML={{ __html: html + tail }} />
 }
 
-/// The harness's own reasoning, dim and collapsible. Collapsed by
-/// default; live streams breathe while the thinking runs.
+/// The harness's own reasoning, dim and collapsible. The pill is the
+/// whole mark while it runs and after it settles. The words stay hidden
+/// until the reader asks - a live stream was a wall of text.
+/// One quiet row for a turn's thinking and tool calls. The conversation
+/// stays the user message and the reply. The steps open as names, not
+/// as a log of every JSON body.
+// Work row for a turn. Named at module scope so the rail can render it.
+function WorkCluster({ items, running }) {
+  const [open, setOpen] = useState(false)
+  const live = workIsLive(items, running)
+  const tools = items.filter((item) => item.kind === 'tool')
+  return (
+    <div className="cv-node cv-work">
+      <button type="button" className="cv-reasoning-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {live && <span className="cv-tool-status-dot" />}
+        {workLabel(items, live)}
+      </button>
+      {open && tools.length > 0 && (
+        <ul className="cv-work-list">
+          {tools.map((item) => (
+            <li key={item.id}>
+              <span className="cv-work-name">{item.name}</span>
+              {toolHint(item) && <span className="cv-work-hint pv">{toolHint(item)}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function ReasoningBlock({ text, live }) {
   const [open, setOpen] = useState(false)
   const label = live ? 'Thinking…' : 'Thought process'
@@ -86,10 +117,133 @@ function ReasoningBlock({ text, live }) {
         <Brain size={12} />
         {label}
       </button>
-      {(open || live) && (
+      {open && (
         <MarkdownBody text={text} live={live} className={`cv-reasoning-body pv${live ? ' live' : ''}`} />
       )}
     </div>
+  )
+}
+
+/// In or Out on a tool card. JSON is fields (a url, an id, a count), not
+/// a `{ "key": "..." }` dump. A long string stays a size mark. Prose that
+/// is short stays readable.
+function ToolIo({ label, raw }) {
+  const parsed = readJson(raw)
+  if (parsed) return <JsonPane label={label} value={parsed} />
+  return <TextIo label={label} raw={typeof raw === 'string' ? raw : JSON.stringify(raw)} />
+}
+
+function JsonPane({ label, value }) {
+  const [open, setOpen] = useState(false)
+  if (!jsonIsLarge(value)) {
+    return (
+      <div className="cv-io-row">
+        <span className="cv-io-label">{label}</span>
+        <JsonView value={value} />
+      </div>
+    )
+  }
+  const preview = bodyPreview(typeof value === 'string' ? value : JSON.stringify(value))
+  return (
+    <>
+      <div className="cv-io-row">
+        <span className="cv-io-label">{label}</span>
+        <button type="button" className="cv-io-fold" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <span className="cv-io-meter" style={{ '--fill': preview.fill }} aria-hidden="true" />
+          <span>{open ? 'Hide' : jsonCaption(value)}</span>
+        </button>
+      </div>
+      {open && (
+        <div className="cv-io-open">
+          <JsonView value={value} />
+        </div>
+      )}
+    </>
+  )
+}
+
+function JsonView({ value }) {
+  return <ShapeView shape={jsonShape(value)} />
+}
+
+function ShapeView({ shape, mono = false }) {
+  if (!shape) return null
+  if (shape.kind === 'object') {
+    return (
+      <div className="cv-json">
+        {shape.fields.map((field) => (
+          <div className="cv-json-row" key={field.key}>
+            <span className="cv-json-key">{field.key}</span>
+            <ShapeView shape={field.shape} mono={field.mono} />
+          </div>
+        ))}
+        {shape.more > 0 && <div className="cv-io-more">{shape.more} more fields</div>}
+      </div>
+    )
+  }
+  if (shape.kind === 'list') {
+    const noun = shape.count === 1 ? '1 item' : `${shape.count} items`
+    return (
+      <div className="cv-json">
+        <span className="cv-json-count">{noun}</span>
+        {shape.items.map((item, index) => (
+          <ShapeView key={index} shape={item} />
+        ))}
+        {shape.more > 0 && <div className="cv-io-more">{shape.more} more items</div>}
+      </div>
+    )
+  }
+  if (shape.kind === 'url') {
+    return <span className="cv-json-val cv-json-val--mono pv" title={shape.href}>{shape.label}</span>
+  }
+  if (shape.kind === 'folded') {
+    return <FoldedText shape={shape} />
+  }
+  return <span className={`cv-json-val pv${mono ? ' cv-json-val--mono' : ''}`}>{shape.text}</span>
+}
+
+function FoldedText({ shape }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <span className="cv-json-fold">
+      <button type="button" className="cv-io-fold" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="cv-io-meter" style={{ '--fill': shape.fill }} aria-hidden="true" />
+        <span>{open ? 'Hide' : shape.size}</span>
+      </button>
+      {open && <code className="pv">{shape.text}</code>}
+    </span>
+  )
+}
+
+function TextIo({ label, raw }) {
+  const preview = bodyPreview(raw)
+  const [open, setOpen] = useState(false)
+  if (!preview.large) {
+    return (
+      <div className="cv-io-row">
+        <span className="cv-io-label">{label}</span>
+        <code className="pv">{preview.text}</code>
+      </div>
+    )
+  }
+  return (
+    <>
+      <div className="cv-io-row">
+        <span className="cv-io-label">{label}</span>
+        <button type="button" className="cv-io-fold" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <span className="cv-io-meter" style={{ '--fill': preview.fill }} aria-hidden="true" />
+          <span>{open ? 'Hide' : preview.size}</span>
+        </button>
+      </div>
+      {open && (
+        <div className="cv-io-open">
+          <code className="pv">{preview.text}</code>
+          {preview.hidden > 0 && (
+            <div className="cv-io-more">Showing the first {MAX_RENDER_LINES} lines.</div>
+          )}
+        </div>
+      )}
+    </>
   )
 }
 
@@ -166,15 +320,18 @@ function DecisionCard({ item, onAnswer }) {
   )
 }
 
-// Claude, Codex, and Pi apply model and effort on the running thread now
-// (claude's own /model and /effort slash commands, codex thread/settings,
-// pi's wire). Fast stays start-time on claude (its /fast is a toggle with
-// no explicit-off form). The others take settings when the process starts,
-// so a stopped chat can still change them - resume is what lands the change.
+// Claude, Codex, Pi, and OpenCode apply a model on the running thread
+// (claude's own /model, codex thread/settings, pi's wire, OpenCode's
+// session model route). Fast stays start-time on claude (its /fast is a
+// toggle with no explicit-off form). Grok and Antigravity take a model
+// when the process starts; an idle chat still changes it, and the daemon
+// restarts that process onto the new model. A turn that is still working
+// waits.
 const LIVE_SETTINGS = {
   claude: { model: true, effort: true, fast: false },
   codex: { model: true, effort: true, fast: true },
   pi: { model: true, effort: true, fast: false },
+  opencode: { model: true, effort: false, fast: false },
 }
 
 export default function ChatView({ chat, onBack, focused = true }) {
@@ -236,6 +393,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
   const composerRef = useRef(null)
   const inputRef = useRef(null)
   const rail = railItems(chat)
+  const quiet = quietRail(rail)
   const pendingDecision = rail.find((item) => item.kind === 'decision' && item.pending)
   // Every tool call riding the rail, keyed the way the duplicate checks
   // pair a decision with its run: (name, input). A settled approval
@@ -786,7 +944,10 @@ export default function ChatView({ chat, onBack, focused = true }) {
       <div className="cv-scroll" ref={scrollRef}>
         <div className="cv-thread">
           {rail.length === 0 && <p className="cv-node cv-note">The transcript will appear here.</p>}
-          {rail.map((item) => {
+          {quiet.map((item) => {
+            if (item.kind === 'work') {
+              return <WorkCluster key={item.id} items={item.items} running={chat.running} />
+            }
             if (item.kind === 'reasoning' || item.kind === 'reasoning-stream') {
               // The harness's own thinking, dim and collapsible - never
               // mixed into the reply. Collapsed by default; the live
@@ -846,10 +1007,8 @@ export default function ChatView({ chat, onBack, focused = true }) {
               // JSON dump of the input. The tile replaces the In row
               // alone; the Out row still shows what the command printed.
               const command = !edit && isCommandRun(item.input) ? item.input : null
-              const shownIn = item.input && !command && !edit
-                ? capLines(typeof item.input === 'string' ? item.input : JSON.stringify(item.input, null, 2))
-                : null
-              const shownOut = item.result ? capLines(item.result) : null
+              const shownIn = item.input && !command && !edit ? item.input : null
+              const shownOut = item.result ? item.result : null
               // The status rides the name line, right-aligned - the beat of
               // agent work: a breathing green dot and Running while the tool
               // is in flight, a check the moment the result lands (green
@@ -906,28 +1065,8 @@ export default function ChatView({ chat, onBack, focused = true }) {
                   )}
                   {(shownIn || shownOut) && !edit && (
                     <div className="cv-io pv">
-                      {shownIn && (
-                        <>
-                          <div className="cv-io-row">
-                            <span className="cv-io-label">In</span>
-                            <code>{shownIn.text}</code>
-                          </div>
-                          {shownIn.hidden > 0 && (
-                            <div className="cv-io-more">Showing the first {MAX_RENDER_LINES} lines.</div>
-                          )}
-                        </>
-                      )}
-                      {shownOut && (
-                        <>
-                          <div className="cv-io-row">
-                            <span className="cv-io-label">Out</span>
-                            <code>{shownOut.text}</code>
-                          </div>
-                          {shownOut.hidden > 0 && (
-                            <div className="cv-io-more">Showing the first {MAX_RENDER_LINES} lines.</div>
-                          )}
-                        </>
-                      )}
+                      {shownIn && <ToolIo label="In" raw={shownIn} />}
+                      {shownOut && <ToolIo label="Out" raw={shownOut} />}
                     </div>
                   )}
                 </div>
@@ -968,7 +1107,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
               </div>
             )
           })}
-          {chat.running && !pendingDecision && (
+          {chat.running && !pendingDecision && !quiet.some((item) => item.kind === 'work' && workIsLive(item.items, true)) && !quiet.some((item) => item.kind === 'stream') && (
             <p className="cv-node cv-node--run cv-running">
               Working...
             </p>
@@ -1077,7 +1216,7 @@ export default function ChatView({ chat, onBack, focused = true }) {
             <div className="nc-pickers">
               {modelsPending && !chat.model ? (
                 <span className="nc-skeleton" aria-hidden="true" />
-              ) : canChange.model && modelItems.length > 0 ? (
+              ) : canChange.model ? (
                 <button
                   type="button"
                   className="nc-meta"

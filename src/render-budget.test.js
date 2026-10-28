@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  bodyPreview,
   capLines,
   capRows,
   MAX_RENDER_LINES,
   MAX_RENDER_ROWS,
+  PREVIEW_CHARS,
   shouldRenderLive,
 } from './render-budget.js'
 
@@ -40,4 +42,18 @@ test('capLines keeps short output whole and caps the rest at its first lines', (
   assert.equal(capped.text, lines.slice(0, MAX_RENDER_LINES).join('\n'))
   assert.equal(capped.hidden, 2)
   assert.ok(capped.text.startsWith('line 0\nline 1'), 'the head is what shows')
+})
+
+test('a long tool body folds even when it is one line', () => {
+  assert.equal(bodyPreview('ok').large, false)
+  assert.equal(bodyPreview('one\ntwo\nthree').large, false)
+  const page = 'x'.repeat(PREVIEW_CHARS + 1)
+  const folded = bodyPreview(page)
+  assert.equal(folded.large, true)
+  assert.equal(folded.size, `${PREVIEW_CHARS + 1} chars`)
+  assert.match(folded.fill, /%$/)
+  const pageKb = 'x'.repeat(2400)
+  assert.match(bodyPreview(pageKb).size, /KB/)
+  const many = Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n')
+  assert.equal(bodyPreview(many).large, true)
 })

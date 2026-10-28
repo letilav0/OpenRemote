@@ -62,14 +62,16 @@ impl SessionDriver {
             // Codex's own wire is thread/settings/update - a turn/start
             // override is ignored once the thread adopted a model.
             SessionDriver::Codex(driver) => driver.apply_settings(settings).await,
-            // Grok, OpenCode, and Antigravity take model and effort on the
-            // process that starts the chat. A running process has no wire
-            // for a change; resume is how it lands.
-            SessionDriver::Grok(_) | SessionDriver::Opencode(_) | SessionDriver::Agy(_) => {
-                Err(DriverError::Harness(
-                    "this harness applies model and effort when the chat starts - stop it and resume to change them".into(),
-                ))
-            }
+            // OpenCode v2 switches the live session's model. v1, and
+            // effort or fast, still answer with the start-time error so
+            // the supervisor can restart the process onto the stored word.
+            SessionDriver::Opencode(driver) => driver.apply_settings(settings).await,
+            // Grok and Antigravity take model and effort on the process
+            // that starts the chat. A running process has no wire for a
+            // change; the supervisor restarts it onto the stored word.
+            SessionDriver::Grok(_) | SessionDriver::Agy(_) => Err(DriverError::Harness(
+                "this harness applies model and effort when the chat starts - stop it and resume to change them".into(),
+            )),
             SessionDriver::Pi(driver) => driver.apply_settings(settings).await,
         }
     }
@@ -280,10 +282,11 @@ impl Backend {
             // --list-models` answers "No models available" here) - the
             // slot stays reserved until that probe is honest.
             Backend::Pi(_) => Ok(None),
-            // OpenCode's /api/model is a catalog without a current-model
-            // marker (observed live: the model only rides step-started
-            // events) - the catalog stays reserved.
-            Backend::Opencode(_) => Ok(None),
+            // OpenCode's GET /api/model. The pick word is provider/id;
+            // the session reports id, which rides resolved_model.
+            Backend::Opencode(resolution) => {
+                openremote_opencode::models(resolution).await.map(Some)
+            }
             // Antigravity's `agy models` prints its own catalog (TSV).
             Backend::Agy(resolution) => openremote_agy::driver::models(resolution).await.map(Some),
         }

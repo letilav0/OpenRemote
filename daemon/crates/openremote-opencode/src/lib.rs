@@ -11,6 +11,7 @@
 //! Permissions and questions are answered with OpenCode's own words
 //! (`once | always | reject`; question answers as selected labels).
 
+pub mod catalog;
 pub mod commands;
 pub mod driver;
 pub mod http;
@@ -19,6 +20,7 @@ pub mod resolve;
 
 use std::path::Path;
 
+pub use catalog::models;
 pub use commands::commands;
 pub use driver::Driver;
 pub use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions};

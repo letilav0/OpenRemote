@@ -2655,8 +2655,9 @@ struct SettingsBody {
     permission_mode: Option<String>,
 }
 
-/// Model, effort, and fast on a live chat. A harness that only accepts the
-/// change at process start answers 409 while the chat is running.
+/// Model, effort, and fast on a chat. A harness that only accepts the
+/// change at process start restarts an idle chat onto the new word. A
+/// turn that is still working answers 409.
 async fn post_settings(
     State(app): State<Arc<App>>,
     AxumPath(id): AxumPath<String>,

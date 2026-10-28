@@ -1474,11 +1474,13 @@ impl Supervisor {
     }
 
     /// Change model, effort, or fast on a live chat, in the harness's own
-    /// words. A harness that only accepts the change at process start gets
-    /// it on the next resume - the chat must be stopped first, and the
-    /// error says so. Codex and Pi apply it on the running thread now.
+    /// words. Codex, Pi, and OpenCode v2 apply a model on the running
+    /// thread. A harness that only accepts the change at process start
+    /// keeps the same conversation: the word is stored, and an idle
+    /// process is restarted onto it. A turn that is still working has to
+    /// finish first.
     pub async fn update_settings(
-        &self,
+        self: &Arc<Self>,
         id: &SessionId,
         settings: openremote_harness::SessionSettings,
     ) -> Result<Session, SupervisorError> {
@@ -1507,23 +1509,40 @@ impl Supervisor {
         }
         self.ensure_here(id)?;
         let session = self.session(id)?;
-        if let Ok(entry) = self.entry(id).await {
+        // A start-time harness has no live wire. The stored word still
+        // changes; an idle process is restarted onto it below so the
+        // user does not have to stop and resume by hand.
+        let restart = if let Ok(entry) = self.entry(id).await {
             // Strip the start-time field before the driver sees it: the
             // live wire carries only what a harness can apply now.
             let mut live = settings.clone();
             live.permission_mode = None;
-            entry
-                .driver
-                .lock()
-                .await
-                .apply_settings(&live)
-                .await
-                .map_err(SupervisorError::from)?;
+            match entry.driver.lock().await.apply_settings(&live).await {
+                Ok(()) => false,
+                Err(openremote_harness::DriverError::Harness(message))
+                    if message.contains("when the chat starts") =>
+                {
+                    if matches!(
+                        session.status,
+                        openremote_core::SessionStatus::Starting
+                            | openremote_core::SessionStatus::Working
+                            | openremote_core::SessionStatus::Waiting
+                    ) {
+                        return Err(SupervisorError::Conflict(
+                            "wait for this turn to finish, then change the model".into(),
+                        ));
+                    }
+                    true
+                }
+                Err(error) => return Err(error.into()),
+            }
         } else if session.status.is_alive() {
             return Err(SupervisorError::Conflict(
                 "the chat is starting - try again in a moment".into(),
             ));
-        }
+        } else {
+            false
+        };
         let updated = self
             .with_store(|s| {
                 // A custom model id is free text in the harness's own
@@ -1551,6 +1570,12 @@ impl Supervisor {
                 session: updated.clone(),
             }],
         )?;
+        if restart {
+            // Same conversation, new process. Resume passes the model
+            // just stored. A stop that already settled is still resumable.
+            self.stop(id).await?;
+            return self.resume(id).await;
+        }
         Ok(updated)
     }
 

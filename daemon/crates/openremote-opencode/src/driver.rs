@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use openremote_core::{DecisionKind, DecisionOption, TurnOutcome};
 use openremote_harness::events::{ApprovalRequest, DecisionSpec};
-use openremote_harness::{DriverError, DriverEvent, Resolution, SpawnOptions};
+use openremote_harness::{DriverError, DriverEvent, Resolution, SessionSettings, SpawnOptions};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -118,6 +118,34 @@ impl Driver {
             .flatten()
             .any(|known| known == name)
             .then(|| (name.to_string(), arguments.to_string()))
+    }
+
+    /// v2 takes a model on the live session (`POST /api/session/:id/model`).
+    /// Effort and fast have no wire here; v1 takes the model only at
+    /// process start. Either case is the start-time error the supervisor
+    /// restarts on, so the stored model is what the next process runs.
+    pub async fn apply_settings(&mut self, settings: &SessionSettings) -> Result<(), DriverError> {
+        if let Some(model) = settings
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+        {
+            if self.wire == Wire::V2 {
+                self.client
+                    .post(
+                        &format!("/api/session/{}/model", self.session_id),
+                        json!({"model": model_ref(model)}),
+                    )
+                    .await?;
+            } else {
+                return Err(start_time_settings());
+            }
+        }
+        if settings.effort.is_some() || settings.fast.is_some() {
+            return Err(start_time_settings());
+        }
+        Ok(())
     }
 
     pub async fn interrupt(&mut self) -> Result<(), DriverError> {
@@ -281,12 +309,7 @@ async fn spawn_serve(
     // installed opencode's own 400s - `modelID` is its old shape).
     let mut body = json!({});
     if let Some(model) = &opts.model {
-        let provider = model.split('/').next().unwrap_or("");
-        body["model"] = if model.contains('/') {
-            json!({"id": model.split('/').nth(1).unwrap_or(model), "providerID": provider})
-        } else {
-            json!({"id": model, "providerID": "opencode"})
-        };
+        body["model"] = model_ref(model);
     }
     if let Some(resume) = &opts.resume {
         body["id"] = json!(resume);
@@ -760,6 +783,22 @@ fn map_form(properties: &Value) -> Option<DriverEvent> {
             request,
         },
     })
+}
+
+fn model_ref(model: &str) -> Value {
+    let provider = model.split('/').next().unwrap_or("");
+    if model.contains('/') {
+        json!({"id": model.split('/').nth(1).unwrap_or(model), "providerID": provider})
+    } else {
+        json!({"id": model, "providerID": "opencode"})
+    }
+}
+
+fn start_time_settings() -> DriverError {
+    DriverError::Harness(
+        "this harness applies model and effort when the chat starts - stop it and resume to change them"
+            .into(),
+    )
 }
 
 fn prompt_body(wire: Wire, text: &str) -> Value {

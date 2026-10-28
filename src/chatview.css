@@ -210,6 +210,34 @@
   color: var(--text-2);
 }
 
+.cv-work-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cv-work-list li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+  padding: 2px 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.cv-work-name {
+  flex: none;
+}
+
+.cv-work-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+}
+
 .cv-reasoning-body {
   margin: 6px 0 0;
   padding: 8px 12px;
@@ -662,6 +690,107 @@
   font-family: ui-monospace, Consolas, monospace;
   font-size: 12px;
   line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+/* A long In or Out stays a size mark. The bar is the only picture of
+   how much the harness wrote; the words open on a click. */
+.cv-io-fold {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cv-io-fold:hover {
+  color: var(--text-2);
+}
+
+.cv-io-meter {
+  flex: none;
+  width: 72px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+  position: relative;
+}
+
+.cv-io-meter::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--fill, 16%);
+  border-radius: inherit;
+  background: var(--text-3);
+}
+
+.cv-io-open {
+  padding: 0 12px 8px 42px;
+}
+
+.cv-io-open code {
+  display: block;
+  max-height: 160px;
+  overflow: auto;
+}
+
+/* JSON as fields: the key, then the value. No braces, no quotes. */
+.cv-json {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cv-json-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.cv-json-key,
+.cv-json-count {
+  color: var(--text-3);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cv-json-val {
+  color: var(--text-2);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cv-json-val--mono {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+
+.cv-json-fold {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cv-json-fold code {
+  max-height: 120px;
+  overflow: auto;
   white-space: pre-wrap;
 }
 
