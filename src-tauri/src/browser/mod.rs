@@ -150,6 +150,12 @@ pub struct Bounds {
 
 /// A browser key pressed while a page had focus: the page never sees it
 /// and the console acts on it (`Mod+T`, the app's own `Mod+K`...).
+///
+/// Built only by the Windows backend, where the WebView2 accelerator handler is what
+/// reports the key; the other two platforms let the console's own listener see it, so
+/// on Linux this type is declared and never constructed, which `-D warnings` reads as
+/// dead code. The allow is that fact, not a silence.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Clone, Debug, Serialize)]
 pub struct KeyPress {
     pub tab: String,
