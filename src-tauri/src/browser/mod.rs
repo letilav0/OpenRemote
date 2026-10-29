@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use openremote_browser::Controller;
@@ -25,6 +25,7 @@ use tauri::{
 };
 
 mod agent;
+mod downloads;
 pub mod pipe;
 #[cfg(all(windows, debug_assertions))]
 pub mod selftest;
@@ -34,7 +35,10 @@ mod win;
 /// The console's webview: the only one that hears the browser's events.
 const CONSOLE: &str = "main";
 
-static DOWNLOADS: AtomicU64 = AtomicU64::new(0);
+/// Every tab's downloads in one ledger: ids are unique across the app, and a
+/// finish from one tab can never close the row another tab opened.
+static DOWNLOADS: LazyLock<Mutex<downloads::Ledger>> =
+    LazyLock::new(|| Mutex::new(downloads::Ledger::default()));
 
 /// The tabs this window holds, by id.
 #[derive(Default)]
@@ -249,9 +253,6 @@ pub fn open_tab(
     let dev = app.config().build.dev_url.clone();
     let (on_load, on_title, on_popup, on_download) =
         (app.clone(), app.clone(), app.clone(), app.clone());
-    // Downloads are told apart by their address, which is all the finish
-    // event carries; the newest started one with that address finishes.
-    let started: std::sync::Arc<Mutex<Vec<(String, u64)>>> = Default::default();
     let popup_from = id.clone();
     let builder = WebviewBuilder::new(&id, WebviewUrl::External(url.clone()))
         .data_directory(profile_dir(&app)?)
@@ -297,37 +298,20 @@ pub fn open_tab(
         // folder, a free name); handling them here keeps Edge's own
         // download bubble away, and the console lists them instead.
         .on_download(move |webview, event| {
-            let download = match event {
-                DownloadEvent::Requested { url, destination } => {
-                    let id = DOWNLOADS.fetch_add(1, Ordering::Relaxed) + 1;
-                    started
-                        .lock()
-                        .expect("downloads lock")
-                        .push((url.to_string(), id));
-                    Download {
-                        id,
-                        tab: webview.label().to_string(),
-                        url: url.to_string(),
-                        path: Some(destination.display().to_string()),
-                        state: "started",
+            let tab = webview.label().to_string();
+            let download = {
+                let mut ledger = DOWNLOADS.lock().expect("downloads lock");
+                match event {
+                    DownloadEvent::Requested { url, destination } => {
+                        let path = destination.display().to_string();
+                        ledger.requested(&tab, url.as_ref(), Some(path))
                     }
-                }
-                DownloadEvent::Finished { url, path, success } => {
-                    let url = url.to_string();
-                    let id = {
-                        let mut started = started.lock().expect("downloads lock");
-                        let at = started.iter().rposition(|(u, _)| *u == url);
-                        at.map(|at| started.remove(at).1).unwrap_or_default()
-                    };
-                    Download {
-                        id,
-                        tab: webview.label().to_string(),
-                        url,
-                        path: path.map(|p| p.display().to_string()),
-                        state: if success { "done" } else { "failed" },
+                    DownloadEvent::Finished { url, path, success } => {
+                        let path = path.map(|path| path.display().to_string());
+                        ledger.finished(&tab, url.as_ref(), path, success)
                     }
+                    _ => return true,
                 }
-                _ => return true,
             };
             let _ = on_download.emit_to(console(), "browser:download", download.clone());
             pipe::download(&on_download, &download);
