@@ -24,6 +24,14 @@ const HISTORY_DAYS: i64 = 90;
 /// many superseded operations.
 const COMPACT_AFTER: usize = 20_000;
 
+/// Ceilings on the two collections a peer may write through a sync note. The
+/// console writes tens of settings, and a person's bookmark tree is in the
+/// hundreds to low thousands, so a real profile stays far below both and the
+/// numbers are a trust boundary rather than a product limit. At a ceiling a new
+/// key is refused and the rows already held stay (see [`BrowserStore::merge_row`]).
+pub const CAP_SETTING: usize = 200;
+pub const CAP_BOOKMARK: usize = 5_000;
+
 /// A hybrid logical clock stamp: wall-clock milliseconds, a counter for
 /// operations within one millisecond, and the device as the tie-break.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -248,12 +256,20 @@ impl BrowserStore {
     /// rewrites only its own file, and a foreign stamp in there would be
     /// dropped on the next rewrite. Equal stamps mean the same write, so the
     /// local copy stays and nothing is appended.
+    ///
+    /// A key this store does not hold may not grow a collection past its
+    /// ceiling ([`CAP_SETTING`], [`CAP_BOOKMARK`]): a new key is refused and
+    /// the rows already held stay. Dropping the oldest by stamp would let a
+    /// peer evict a user's own bookmark by inventing a newer one, and the
+    /// collections are small enough that refusing is the honest door. An update
+    /// to a key already held always lands; the local writer (`put`) is the
+    /// user's own hand and is not capped here.
     pub fn merge_row(&mut self, col: &str, key: &str, at: &Stamp, val: &Value) -> bool {
-        if self
-            .state
-            .get(&(col.to_string(), key.to_string()))
-            .is_some_and(|(local, _)| local >= at)
-        {
+        let slot = (col.to_string(), key.to_string());
+        if self.state.get(&slot).is_some_and(|(local, _)| local >= at) {
+            return false;
+        }
+        if !self.state.contains_key(&slot) && self.at_cap(col) {
             return false;
         }
         let op = Op {
@@ -270,6 +286,18 @@ impl BrowserStore {
         }
         self.apply(op);
         true
+    }
+
+    /// Whether a collection holds its ceiling. The whole state is checked
+    /// first: a collection is never larger than it, so the count only has to be
+    /// walked once the store is already big.
+    fn at_cap(&self, col: &str) -> bool {
+        let cap = if col == "bookmark" {
+            CAP_BOOKMARK
+        } else {
+            CAP_SETTING
+        };
+        self.state.len() >= cap && self.state.keys().filter(|(c, _)| c == col).count() >= cap
     }
 
     /// Rewrites this device's log with only what is still true, and drops

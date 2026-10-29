@@ -135,6 +135,18 @@ a version behind cannot be mistaken for a chat one; none of that is a protection
 simply means it. Removal is: a device taken off the account stops being a device of the account, and
 its notes stop arriving with its key.
 
+The note is bounded, which is what stops a broken or hostile peer from growing this computer without
+limit. One note may carry at most 5,200 rows (the two collections' ceilings together) and no row's
+value may exceed 4 KiB; a note over either ceiling, or one introducing more keys than a collection
+can hold, is ignored whole with a named reason (`Refused` in `browser/sync.rs`) rather than half
+applied. The store itself holds at most 200 settings and 5,000 bookmarks: at a ceiling a new key is
+refused and the rows already held stay. Dropping the oldest by stamp was the alternative and it is
+the wrong door, because it would let a peer evict a bookmark the user made by inventing a newer one.
+A local row above the value ceiling is left out of this device's own snapshot for the same reason: a
+peer refuses the whole note for one, and sending it would stop this device's sync to say nothing. The
+numbers sit far above a real profile (tens of settings, and bookmarks in the hundreds to low
+thousands) and are pinned by a test, so raising one is a decision rather than a tweak.
+
 The private-chat refusal is by construction in each of the four chat paths, not one shared check.
 Only the tombstone path has a test (`sync.rs`,
 `a_tombstone_naming_a_private_chat_is_refused_and_its_data_survives`); the other three are read

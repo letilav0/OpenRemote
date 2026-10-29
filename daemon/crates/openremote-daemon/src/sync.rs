@@ -426,7 +426,17 @@ pub fn on_note(app: &Arc<App>, peer: PeerContext, note: Value) {
         let from = peer.device_id.to_string();
         let mut store = lock_recovering(&app.browser.store);
         let mut received = lock_recovering(&app.sync.browser);
-        received.merge(&mut store, &from, &note);
+        // A refusal leaves the store as it was: the ceilings in
+        // browser/sync.rs are checked before any row is written. The peer is
+        // told nothing, because a note is one-way and a reply would be a second
+        // protocol, but this device's own log says why the note was ignored,
+        // since a refusal that leaves no trace anywhere cannot be diagnosed.
+        if let Err(refused) = received.merge(&mut store, &from, &note) {
+            eprintln!(
+                "warning: a browser note from {from} was refused: {}",
+                refused.reason()
+            );
+        }
         return;
     }
     let Some(id) = note["session"].as_str().and_then(SessionId::parse) else {
