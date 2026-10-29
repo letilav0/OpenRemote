@@ -185,6 +185,17 @@
   line-height: 1.65;
 }
 
+/* A harness prints what it prints: an authorize address is several hundred
+   characters, a token or a hash has no spaces at all. The column wraps those
+   rather than growing a horizontal scrollbar, in the person's own message as
+   well as the reply and the notes. Code fences are exempt by their own rule -
+   they scroll inside their border, which is what code wants. */
+.cv-agent,
+.cv-note,
+.cv-user {
+  overflow-wrap: anywhere;
+}
+
 /* ── the harness's own reasoning: dim, collapsible, never in the way ── */
 
 .cv-reasoning-head {
