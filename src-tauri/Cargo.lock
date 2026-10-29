@@ -2901,7 +2901,7 @@ dependencies = [
 
 [[package]]
 name = "openremote-ui-desktop"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "android_system_properties",
  "base64 0.22.1",
