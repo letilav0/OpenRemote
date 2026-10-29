@@ -485,14 +485,35 @@ html[data-reduce-motion] .bw-btn {
 /* The browser docked right: a fixed width beside the chat, with the same
    browser chrome and a pane-closing button in the tab strip. */
 .bw-pane {
-  flex: 0 0 460px;
-  max-width: 60%;
+  /* 560 is the fallback before the first paint; the width a person drags is a preference
+     (pane-width.js) and is applied inline, and the share here is its ceiling. */
+  flex: 0 0 560px;
+  max-width: 70%;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--line);
   background: var(--bg-app);
+}
+
+/* The grip the row draws between the chat and the browser pane: a hairline that answers
+   the pointer. It is a separator in the accessibility tree, so a keyboard moves it with
+   the arrow keys, and a double click puts it back to the default width. */
+.bw-grip {
+  flex: 0 0 5px;
+  margin-left: -3px;
+  cursor: col-resize;
+  align-self: stretch;
+  position: relative;
+  z-index: 2;
+  touch-action: none;
+}
+
+.bw-grip:hover,
+.bw-grip:focus-visible {
+  background: var(--line-strong, rgba(255, 255, 255, 0.18));
+  outline: none;
 }
 
 .bw-pane > .bw {

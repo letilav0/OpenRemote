@@ -15,6 +15,7 @@ import MobileView from './MobileView.jsx'
 import MetricsView from './MetricsView.jsx'
 import BrowserPane from './BrowserPane.jsx'
 import { onBrowserRequest, openedKey, shouldAutoOpen } from './browser-placement.js'
+import { DEFAULT_PANE_WIDTH, MIN_PANE_WIDTH, clampPaneWidth, loadPaneWidth, savePaneWidth } from './pane-width.js'
 import FloatingBar from './FloatingBar.jsx'
 import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn, sessionsForMode } from './cloud.js'
@@ -230,6 +231,30 @@ function Shell() {
   // kept so the pane can be told which tab or address to show.
   const browserRequest = useRef(null)
   const [browserAsk, setBrowserAsk] = useState(null)
+  // The pane's width: remembered, clamped to this window, and dragged by the grip the
+  // row draws beside it.
+  const [browserWidth, setBrowserWidth] = useState(loadPaneWidth)
+  const startBrowserDrag = (e) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = browserWidth
+    const target = e.currentTarget
+    target.setPointerCapture(e.pointerId)
+    let latest = startWidth
+    const move = (ev) => {
+      latest = clampPaneWidth(startWidth + (startX - ev.clientX), window.innerWidth)
+      setBrowserWidth(latest)
+    }
+    const done = () => {
+      target.removeEventListener('pointermove', move)
+      target.removeEventListener('pointerup', done)
+      target.removeEventListener('pointercancel', done)
+      savePaneWidth(latest)
+    }
+    target.addEventListener('pointermove', move)
+    target.addEventListener('pointerup', done)
+    target.addEventListener('pointercancel', done)
+  }
   useEffect(
     () =>
       onBrowserRequest((request) => {
@@ -1174,7 +1199,41 @@ function Shell() {
               {/* The browser docked right: beside the chat, never instead
                   of it. The floating bar (on the homepage) and the sidebar
                   open and close it. */}
-              {browserOpen && <BrowserPane onClose={() => setBrowserOpen(false)} askToShow={browserAsk} />}
+              {browserOpen && (
+                <>
+                  {/* The pane is as wide as the person left it, and this grip is how they
+                      leave it: drag to widen or narrow, double-click for the default.
+                      A separator, so the keyboard can move it too. */}
+                  <div
+                    className="bw-grip"
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize the browser pane"
+                    aria-valuenow={browserWidth}
+                    aria-valuemin={MIN_PANE_WIDTH}
+                    tabIndex={0}
+                    title="Drag to resize - double-click for the default width."
+                    onPointerDown={startBrowserDrag}
+                    onDoubleClick={() => {
+                      setBrowserWidth(clampPaneWidth(DEFAULT_PANE_WIDTH, window.innerWidth))
+                      savePaneWidth(DEFAULT_PANE_WIDTH)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+                      e.preventDefault()
+                      const step = e.key === 'ArrowLeft' ? -24 : 24
+                      const next = clampPaneWidth(browserWidth + step, window.innerWidth)
+                      setBrowserWidth(next)
+                      savePaneWidth(next)
+                    }}
+                  />
+                  <BrowserPane
+                    width={browserWidth}
+                    onClose={() => setBrowserOpen(false)}
+                    askToShow={browserAsk}
+                  />
+                </>
+              )}
             </div>
           </main>
           {paneMenu && (
