@@ -126,6 +126,13 @@ spacing.
   (visible and focused) clears the mark; a chat left open in a background
   window stays unread. A list head - a project, the Chats section - lifts one
   text tier while anything inside it is unread.
+  The lists page rather than running on: a project draws five chats and the
+  flat Chats list fifteen, and a quiet "Show N more" line under the rows
+  reveals the rest of that list for this session. A chat can be pinned from
+  its own row menu: its row moves to the top of its project's list (or of the
+  Chats list, for one that belongs to no project) in the order the pins were
+  made, newest first, and wears a pin mark; Unpin in the same menu puts it
+  back, and a pin whose chat is gone is simply not drawn.
   The Mobile tile is the phones' status without words: green tile + black
   glyph while one is reachable, a hollow corner dot while away, quiet when
   there is none.

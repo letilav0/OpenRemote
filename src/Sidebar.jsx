@@ -17,6 +17,8 @@ import {
   DeviceMobile,
   GearSix,
   House,
+  PushPin,
+  PushPinSlash,
   Lightning,
   MagnifyingGlass,
   Globe,
@@ -46,6 +48,7 @@ import { chatTitle } from './shape.js'
 import { RECONNECTING } from './pane-header.js'
 import { canCopyChat, chatMarkdown, copiedLine } from './chat-markdown.js'
 import { errorCopy } from './error-copy.js'
+import { CHATS_PAGE, PROJECT_PAGE, loadPins, planList, storePins, togglePin } from './sidebar-list.js'
 import { usePrivacyMode } from './privacy.js'
 import { useHint, useShortcut } from './keyboard.jsx'
 import './sidebar.css'
@@ -161,6 +164,22 @@ export default function Sidebar({
     setSeen(next)
     storeSeen(next)
   }
+  // The chats this person keeps at the top of their lists. Stored on this
+  // computer beside the seen map and the folded projects: an arrangement of
+  // a place, not something the daemon carries. Newest pin first, and a pin
+  // whose chat has gone is simply not drawn (the rule skips it, so a deleted
+  // chat cannot leave an empty row behind).
+  const [pins, setPins] = useState(() => loadPins())
+  const pinChat = (id) =>
+    setPins((current) => {
+      const next = togglePin(current, id)
+      if (next !== current) storePins(next)
+      return next
+    })
+  // Which lists have been opened up past their page for this session: the
+  // list grows, the stored order does not.
+  const [showAll, setShowAll] = useState(() => new Set())
+  const showMore = (key) => setShowAll((current) => new Set(current).add(key))
 
   // Local: everything that runs on this computer. Cloud: every synced chat,
   // named by the device it runs on when that isn't this one.
@@ -347,11 +366,26 @@ export default function Sidebar({
   // chats that need the user first (they are at the top of the list), then
   // each open project's chats, then the flat Chats list. A folded project's
   // chats are skipped, like the eye skips them - unless a search has opened it.
+  // The walk visits what is drawn, not what is paged away: a row nobody can
+  // see is a row the arrows must not land on.
   const searchRef = useRef(null)
+  const planFor = (key, items, page) =>
+    planList(items, {
+      pins,
+      page,
+      expanded: showAll.has(key),
+      keep: (row) => row.id === active,
+    })
+  const flatPlan = planFor('flat', grouped.flat, CHATS_PAGE)
   const order = [
     ...needs.chats,
-    ...grouped.projects.flatMap(({ project, items }) => (folded(project.id) ? [] : items)),
-    ...grouped.flat,
+    ...grouped.projects.flatMap(({ project, items }) => {
+      if (folded(project.id)) return []
+      const plan = planFor(project.id, items, PROJECT_PAGE)
+      return [...plan.pinned, ...plan.shown]
+    }),
+    ...flatPlan.pinned,
+    ...flatPlan.shown,
   ].map((row) => row.id)
   const step = (pick) => () => {
     if (!order.length) return false
@@ -540,8 +574,18 @@ export default function Sidebar({
   const menuItems = (row) => {
     const split = (dir, before) => () => onSplit(row.id, dir, before)
     const canSplit = onSplit && !isMobile
+    // Read once, so the label and the icon cannot disagree about the row.
+    const pinned = pins.includes(row.id)
     return [
       { label: 'Open', icon: <ChatCircle size={14} />, onSelect: () => onSelect(row.id) },
+      // Pinning is an arrangement of the list, like Open is a way into the
+      // chat: it sits at the top, before the edit and split rows, and it is
+      // the one action whose label is the row's own state.
+      {
+        label: pinned ? 'Unpin' : 'Pin',
+        icon: pinned ? <PushPinSlash size={14} /> : <PushPin size={14} />,
+        onSelect: () => pinChat(row.id),
+      },
       // Marking by hand, in the direction the row is drawn in: a chat with a
       // quiet mark offers to clear it, a read one offers to bring the mark
       // back (the person saw it on another device, or wants a reminder to
@@ -691,6 +735,14 @@ export default function Sidebar({
         {row.harness && <HarnessMark harness={row.harness} size={15} />}
         <div className="chat-titles">
           <span className="chat-title pv">{row.title}</span>
+          {/* The visible mark a pinned row wears, in the title line so the
+              list scans: a pin says the row sits at the top of this list by
+              the person's own arrangement, not by its activity. */}
+          {(row.pinned || pins.includes(row.id)) && (
+            <span className="chat-pin" title="Pinned" aria-label="Pinned">
+              <PushPin size={11} weight="fill" />
+            </span>
+          )}
           {/* What the harness is holding, one line, read only. The sidebar
               never answers, approves or dismisses anything: a decision is
               answered in the chat, where the harness's own words, its
@@ -897,6 +949,10 @@ export default function Sidebar({
         )}
         {grouped.projects.map(({ project, items }) => {
           const isCollapsed = folded(project.id)
+          // This project's rows as the list draws them: its pinned chats in pin
+          // order, then the first page of the rest. The plan is built from the
+          // group's own rows, so a chat moved to another project pins there.
+          const plan = planFor(project.id, items, PROJECT_PAGE)
           // One reader of a project's name: projects.js owns the rule (and
           // answers "project" for a project whose folders are gone, where the
           // inline split this replaced would have thrown). A head whose name another
@@ -1029,7 +1085,16 @@ export default function Sidebar({
                       : 'Loading your chats…'}
                 </p>
               )}
-              {!isCollapsed && items.map(chatRow)}
+              {!isCollapsed && plan.pinned.map((row) => chatRow({ ...row, pinned: true }))}
+              {!isCollapsed && plan.shown.map(chatRow)}
+              {!isCollapsed && plan.next > 0 && (
+                // A page control, not a chat row: the list's one Tab stop stays
+                // on the rows, and this line is reachable like the head's own
+                // buttons. It reveals the rest of this list for this session.
+                <button type="button" className="sb-more" onClick={() => showMore(project.id)}>
+                  Show {plan.next} more
+                </button>
+              )}
             </section>
           )
         })}
@@ -1045,7 +1110,13 @@ export default function Sidebar({
             {sessionsAnswered ? 'No chats outside projects.' : 'Loading your chats…'}
           </p>
         )}
-        {grouped.flat.map(chatRow)}
+        {flatPlan.pinned.map((row) => chatRow({ ...row, pinned: true }))}
+        {flatPlan.shown.map(chatRow)}
+        {flatPlan.next > 0 && (
+          <button type="button" className="sb-more" onClick={() => showMore('flat')}>
+            Show {flatPlan.next} more
+          </button>
+        )}
 
         {/* With a project registered and nothing running, the project's own row
             says it has no chats yet; the generic line would say it twice. An

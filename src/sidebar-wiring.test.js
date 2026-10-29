@@ -185,8 +185,8 @@ test('a search opens the projects it matches, whatever the person folded', () =>
     'one rule for folded, used by the head and the keyboard order',
   )
   assert.ok(
-    source.includes('grouped.projects.flatMap(({ project, items }) => (folded(project.id) ? [] : items))'),
-    'the arrows walk into a project the search opened',
+    source.includes('if (folded(project.id)) return []'),
+    'the arrows walk into a project the search opened, and skip its folded rows',
   )
   assert.equal(
     (source.match(/folded\(project\.id\)/g) ?? []).length,
