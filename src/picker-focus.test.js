@@ -15,9 +15,20 @@ test('the menu remembers the control that had focus and gives it back on close',
   // which is also the moment the anchor reads its rect.
   assert.match(source, /const active = typeof document === 'undefined' \? null : document\.activeElement/)
   assert.match(source, /triggerRef\.current = active && active !== document\.body \? active : null/)
-  // Restored from the effect's cleanup, which is the moment the menu leaves.
-  assert.match(source, /const returnTo = triggerRef\.current/)
-  assert.match(source, /if \(returnTo\?\.isConnected\) returnTo\.focus\?\.\(\{ preventScroll: true \}\)/)
+  // Handed back from the effect's cleanup, which is the moment the menu leaves.
+  // Read the block rather than the file: both of these lines are also true if
+  // the restore sits in the effect body, where it would steal focus back to the
+  // trigger as the menu opens and leave the search field empty-handed.
+  const from = source.indexOf("window.addEventListener('mousedown', close, true)")
+  assert.ok(from > 0, 'the menu registers its outside click in an effect')
+  const rest = source.slice(from)
+  const cleanup = rest.indexOf('return () => {')
+  assert.ok(cleanup > 0, 'that effect has a cleanup')
+  assert.match(
+    rest.slice(cleanup),
+    /returnTo\?\.isConnected\) returnTo\.focus\?\.\(\{ preventScroll: true \}\)/,
+    'the focus comes back from the cleanup, not from the effect body',
+  )
 })
 
 test('the outside click is taken in the capture phase and stopped there', () => {
