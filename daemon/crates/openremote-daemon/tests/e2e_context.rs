@@ -256,3 +256,94 @@ async fn claude_shares_its_reasoning_and_thinking_tokens() {
         .expect("thinking tokens ride the turn");
     assert_eq!(thinking.1["tokens"], json!(42));
 }
+
+/// The usage events name the turn they belong to, filled from the live path.
+///
+/// A console reader replaces a turn's tally when the same turn is re-reported,
+/// which is only true while the daemon stamps the turn: `None` is an older
+/// daemon that did not say and would be added instead, while `Some(0)` is the
+/// first turn and is real. This drives two real turns through the fixture and
+/// asserts what the console receives: both of a turn's totals carry `Some`, the
+/// same turn as each other and as the turn the transcript's own delta carried,
+/// and the second turn is a different one. The fixture reports usage once per
+/// prompt, so a same-turn re-report is not producible here; the stamp is what
+/// this proves.
+#[tokio::test]
+async fn the_usage_events_of_a_turn_carry_its_turn() {
+    let daemon = start_daemon(&[("claude", fixture_agent())]).await;
+    let ws = workspace(Some("think"));
+    let created = call(
+        &daemon,
+        "POST",
+        "/sessions",
+        Some(json!({"request_id": "t-create", "harness": "claude", "workspace": ws.path()})),
+    )
+    .await;
+    let id = created.body["id"].as_str().expect("session id").to_string();
+    let path = format!("/sessions/{id}/events");
+    until_kinds(&daemon, &path, &["session.status_changed"]).await;
+    for (request, text) in [("t-p1", "first turn"), ("t-p2", "second turn")] {
+        call(
+            &daemon,
+            "POST",
+            &format!("/sessions/{id}/prompts"),
+            Some(json!({"request_id": request, "text": text})),
+        )
+        .await;
+    }
+    let events = until_count(&daemon, &path, "turn.completed", 2).await;
+
+    let turns_of = |name: &str| -> Vec<Option<u64>> {
+        events
+            .iter()
+            .filter(|(_, p)| kind(p) == name)
+            .map(|(_, p)| p["turn"].as_u64())
+            .collect()
+    };
+    let cost = turns_of("usage.cost");
+    let thinking = turns_of("thinking.tokens");
+    assert_eq!(
+        cost.len(),
+        2,
+        "one cost event per turn; events:\n{}",
+        dump(&events)
+    );
+    assert_eq!(
+        thinking.len(),
+        2,
+        "one thinking event per turn; events:\n{}",
+        dump(&events)
+    );
+    // `None` is an older daemon that did not say; the live path must say.
+    assert!(
+        cost.iter()
+            .chain(thinking.iter())
+            .all(|turn| turn.is_some()),
+        "the live path stamps a turn: cost {:?}, thinking {:?}; events:\n{}",
+        cost,
+        thinking,
+        dump(&events)
+    );
+    assert_eq!(cost, thinking, "a turn's two totals name the same turn");
+    // The daemon's first turn is 0, which is why the wire field is optional
+    // rather than reserving a number for "not said".
+    assert_eq!(
+        cost[0],
+        Some(0),
+        "the first turn is Some(0); events:\n{}",
+        dump(&events)
+    );
+    assert_ne!(
+        cost[0],
+        cost[1],
+        "the second turn is a different turn; events:\n{}",
+        dump(&events)
+    );
+    // And the stamp is the turn the transcript's own events carried, so it is
+    // the live turn and not a placeholder.
+    let delta_turn = events
+        .iter()
+        .find(|(_, p)| kind(p) == "reasoning.delta")
+        .and_then(|(_, p)| p["turn"].as_u64());
+    assert_eq!(cost[0], delta_turn);
+}

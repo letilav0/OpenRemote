@@ -2357,8 +2357,11 @@ impl Supervisor {
             DriverEvent::ThinkingTokens { tokens } => {
                 // The turn this number belongs to, from the same fold the
                 // turn-scoped siblings above read: it lets a reader replace a
-                // re-reported turn's tally instead of adding to it.
-                let turn = self.current_turn(id);
+                // re-reported turn's tally instead of adding to it. The first
+                // turn is 0, so the wire field is `Option<u64>`: `Some(0)` is
+                // that first turn and `None` is an older daemon that did not
+                // say, and a reader must tell the two apart.
+                let turn = Some(self.current_turn(id));
                 self.emit_all(id, vec![EventPayload::ThinkingTokens { tokens, turn }])?;
             }
             DriverEvent::ToolStarted { name, input, .. } => {
@@ -2445,8 +2448,9 @@ impl Supervisor {
             }
             DriverEvent::TurnCost { cost_usd } => {
                 // Same turn identity as the thinking tokens, so money and
-                // tokens are replaced per turn together.
-                let turn = self.current_turn(id);
+                // tokens are replaced per turn together; `Some(0)` is the
+                // first turn, not "not said".
+                let turn = Some(self.current_turn(id));
                 self.emit_all(id, vec![EventPayload::UsageCost { cost_usd, turn }])?;
             }
             DriverEvent::Compacted => {

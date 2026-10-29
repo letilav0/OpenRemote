@@ -229,15 +229,15 @@ function retireLiveItems(chat, turn) {
 
 /// The running total is the baseline plus one contribution per turn.
 ///
-/// `kind` is 'cost' or 'thinking'. A payload with a real turn owns its
-/// contribution: the same turn re-reported under a new seq replaces what it
-/// said, instead of adding again. A payload with turn 0 is an older daemon
-/// that did not say which turn, so its value is added to the baseline, exactly
-/// as every usage event was before the turn existed. A record folded before
-/// the parts existed carries only its total, which becomes the baseline on the
-/// first turn event so nothing already counted is dropped. The published
-/// fields (`costUsd`, `thinkingTokens`) stay the numbers the views read; the
-/// parts are internal to the record.
+/// `kind` is 'cost' or 'thinking'. A payload that carries a turn owns its
+/// contribution, including turn 0, which the daemon's first turn is: the same
+/// turn re-reported under a new seq replaces what it said instead of adding
+/// again. A payload with no turn (`null`, or absent from an older daemon) is
+/// added to the baseline, exactly as every usage event was before the turn
+/// existed. A record folded before the parts existed carries only its total,
+/// which becomes the baseline on the first turn event so nothing already
+/// counted is dropped. The published fields (`costUsd`, `thinkingTokens`) stay
+/// the numbers the views read; the parts are internal to the record.
 function addTurnTotal(chat, kind, turn, value) {
   const baseKey = kind === 'cost' ? 'costBase' : 'thinkingBase'
   const turnsKey = kind === 'cost' ? 'costTurns' : 'thinkingTurns'
@@ -248,7 +248,9 @@ function addTurnTotal(chat, kind, turn, value) {
       ? chat[totalKey]
       : 0
   const turns = { ...(chat[turnsKey] ?? {}) }
-  const real = Number.isInteger(turn) && turn > 0
+  // Presence of a turn, not its value: 0 is the first turn and is real, while
+  // `null`/absent is a daemon that did not say.
+  const real = Number.isInteger(turn)
   if (real) turns[turn] = value
   chat[baseKey] = real ? base : base + value
   chat[turnsKey] = turns

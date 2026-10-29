@@ -56,15 +56,15 @@ pub enum EventPayload {
     /// The turn's thinking-token count - the harness's own number
     /// (claude's `output_tokens_details.thinking_tokens`), with the turn it
     /// belongs to. A re-reported turn under a new seq is then the same turn,
-    /// so a reader can replace its tally instead of adding to it. An older
-    /// daemon sent this without a turn: the field is optional on the wire and
-    /// decodes to 0, which no turn is, so a reader must take 0 as "unknown"
-    /// and never fold it into a turn's tally.
+    /// so a reader can replace its tally instead of adding to it. The first
+    /// turn is 0, so 0 is a real turn: "not said" is its own fact, `None`, and
+    /// a reader must tell the two apart or the first turn's tally is added
+    /// again on every report.
     #[serde(rename = "thinking.tokens")]
     ThinkingTokens {
         tokens: u64,
         #[serde(default)]
-        turn: u64,
+        turn: Option<u64>,
     },
     #[serde(rename = "tool.started")]
     ToolStarted {
@@ -91,12 +91,13 @@ pub enum EventPayload {
     /// The harness reported the turn's cost in USD - its own number,
     /// verbatim, with the turn it belongs to for the same reason as
     /// `thinking.tokens`: a repeat is the same turn, not another turn's money.
-    /// Absent on the wire decodes to 0 ("an older daemon did not say").
+    /// The first turn is 0, so `Some(0)` is a real turn and `None` is the
+    /// older daemon that did not say; a reader must not treat 0 as "unknown".
     #[serde(rename = "usage.cost")]
     UsageCost {
         cost_usd: f64,
         #[serde(default)]
-        turn: u64,
+        turn: Option<u64>,
     },
     /// An informational line in the transcript (compaction notices) - the
     /// console renders it like its other notes.
@@ -135,13 +136,10 @@ impl Event {
             EventPayload::ToolStarted { .. } => "tool.started",
             EventPayload::ToolResult { .. } => "tool.result",
             EventPayload::ContextUsed { .. } => "context.used",
-            EventPayload::UsageCost {
-                cost_usd: _,
-                turn: _,
-            } => "usage.cost",
+            EventPayload::UsageCost { .. } => "usage.cost",
             EventPayload::ReasoningAdded { .. } => "reasoning.added",
             EventPayload::ReasoningDelta { .. } => "reasoning.delta",
-            EventPayload::ThinkingTokens { tokens: _, turn: _ } => "thinking.tokens",
+            EventPayload::ThinkingTokens { .. } => "thinking.tokens",
             EventPayload::NoteAdded { .. } => "note.added",
             EventPayload::DecisionRequested { .. } => "decision.requested",
             EventPayload::DecisionResponded { .. } => "decision.responded",
@@ -160,7 +158,7 @@ mod tests {
         serde_json::from_value(wire).expect("a payload round-trips")
     }
 
-    fn turn_of(payload: &EventPayload) -> u64 {
+    fn turn_of(payload: &EventPayload) -> Option<u64> {
         match payload {
             EventPayload::ThinkingTokens { turn, .. } | EventPayload::UsageCost { turn, .. } => {
                 *turn
@@ -176,15 +174,15 @@ mod tests {
         // report, so a reader can replace instead of add.
         let first = EventPayload::ThinkingTokens {
             tokens: 10,
-            turn: 3,
+            turn: Some(3),
         };
         let repeat = EventPayload::ThinkingTokens {
             tokens: 10,
-            turn: 3,
+            turn: Some(3),
         };
         let next = EventPayload::ThinkingTokens {
             tokens: 10,
-            turn: 4,
+            turn: Some(4),
         };
         assert_eq!(
             turn_of(&round_trip(&first)),
@@ -200,19 +198,29 @@ mod tests {
 
     #[test]
     fn a_usage_event_from_an_older_daemon_decodes_without_a_turn() {
-        // Absent means "an older daemon did not say": 0, which is not a turn,
-        // so a reader must not fold it into a turn's tally.
+        // Absent means "an older daemon did not say": `None`, never 0, because
+        // the first turn is 0 and is a real turn a reader must be able to
+        // replace. The two must stay distinguishable on the wire.
         let thinking: EventPayload = serde_json::from_value(serde_json::json!({
             "type": "thinking.tokens",
             "tokens": 7,
         }))
         .expect("an old thinking event still decodes");
-        assert_eq!(turn_of(&thinking), 0);
+        assert_eq!(turn_of(&thinking), None);
         let cost: EventPayload = serde_json::from_value(serde_json::json!({
             "type": "usage.cost",
             "cost_usd": 1.5,
         }))
         .expect("an old cost event still decodes");
-        assert_eq!(turn_of(&cost), 0);
+        assert_eq!(turn_of(&cost), None);
+
+        // A stamped first turn arrives as `Some(0)`, and the round trip keeps
+        // it distinct from the old daemon's `None`.
+        let first_turn = EventPayload::UsageCost {
+            cost_usd: 1.5,
+            turn: Some(0),
+        };
+        assert_eq!(turn_of(&round_trip(&first_turn)), Some(0));
+        assert_ne!(turn_of(&round_trip(&first_turn)), turn_of(&thinking));
     }
 }
