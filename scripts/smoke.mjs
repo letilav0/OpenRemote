@@ -1757,6 +1757,86 @@ if (settingsSearch.why || !settingsSearch.run) {
   )
 }
 
+// ---- the browser's three surfaces tonight ----
+//
+// Five checks in the order a person meets them: find the pane open (toggling
+// only when it is not already there), load the dev server, keep the page on
+// the bookmarks bar, read it in History, and leave the address field without
+// losing the window.
+
+const paneAlready = await evaluate("!!document.querySelector('.bw-bar input')")
+if (!paneAlready) await key({ key: 'b', code: 'KeyB', vk: 66, modifiers: 2 | 8 })
+const paneOpen = await waitFor("!!document.querySelector('.bw-bar input')", { timeout: 8000 })
+record(
+  'the browser pane opens from Ctrl+Shift+B with its address bar',
+  paneOpen,
+  paneOpen ? `${paneAlready ? 'the pane was already open' : 'Ctrl+Shift+B opened the pane'}, with its .bw-bar input` : 'Ctrl+Shift+B did not open the pane',
+)
+
+if (!paneOpen) {
+  skip('the browser surfaces', 'the pane never opened')
+} else {
+  const run = { loaded: false, address: '', tabs: 0, starred: false, chip: '', bar: 0, history: false, historyRow: '', escaped: false, stillThere: false }
+  try {
+    await insertInto('.bw-bar input', 'http://127.0.0.1:5175')
+    await key({ key: 'Enter', code: 'Enter', vk: 13, modifiers: 0 })
+    run.loaded = await waitFor(
+      "(() => { const i = document.querySelector('.bw-bar input'); const t = [...document.querySelectorAll('[role=\"tab\"]')].filter((el) => el.getClientRects().length > 0); return Boolean(i) && i.value.includes('127.0.0.1') && t.length > 0; })()",
+      { timeout: 15000 },
+    )
+    run.address = await evaluate("document.querySelector('.bw-bar input')?.value ?? ''")
+    run.tabs = await evaluate("document.querySelectorAll('[role=\"tab\"]').length")
+    record(
+      'the pane loads the dev server and shows its address',
+      run.loaded,
+      run.loaded ? 'field reads "' + run.address + '", ' + run.tabs + ' tab(s)' : 'the field reads "' + run.address + '" with ' + run.tabs + ' tab(s)',
+    )
+
+    const starPressed = await evaluate("(() => { const b = document.querySelector('.bw-bar .bw-star'); if (!b || b.disabled) return false; b.click(); return true; })()")
+    run.starred = starPressed && (await waitFor("[...document.querySelectorAll('.bw-marks .bw-mark')].length > 0", { timeout: 5000 }))
+    run.bar = await evaluate("document.querySelectorAll('.bw-marks .bw-mark').length")
+    run.stored = await evaluate("(() => { try { const raw = JSON.parse(localStorage.getItem('openremote-browser-bookmarks') || '{}'); return (raw.marks || []).some((m) => m.url === 'http://127.0.0.1:5175'); } catch { return false } })()")
+    run.chip = await evaluate("([...document.querySelectorAll('.bw-marks .bw-mark-title')][0]?.textContent ?? '').trim()")
+    record(
+      'the star puts the page on the bookmarks bar as one chip',
+      run.starred && run.bar === 1 && run.chip.length > 0 && run.stored,
+      starPressed ? run.bar + ' chip(s), first reads "' + run.chip + '", stored: ' + run.stored : 'no enabled .bw-star beside the address bar',
+    )
+
+    // The row is enabled once the view has the visit; the store write and the
+    // next render are one beat apart, so wait for the durable fact first.
+    await waitFor("(() => { try { const raw = JSON.parse(localStorage.getItem('openremote-browser-history') || '{}'); return (raw.visits || []).some((v) => String(v.url || '').includes('127.0.0.1:5175')); } catch { return false } })()", { timeout: 8000 })
+    const more = await evaluate("(() => { const b = [...document.querySelectorAll('.bw-bar button')].find((x) => /^More/.test(x.getAttribute('title') || x.getAttribute('aria-label') || '')); if (!b) return false; b.click(); return true; })()")
+    const menuOpen = more && (await waitFor("!!document.querySelector('.ctx-menu')", { timeout: 4000 }))
+    let why = more ? 'the More menu did not open' : 'no More button in the bar'
+    if (menuOpen) {
+      why = await evaluate("(() => { const r = [...document.querySelectorAll('.ctx-menu .nc-item')].find((i) => /^History/.test(i.textContent.trim())); if (!r) return 'the menu has no History row'; if (r.disabled) return 'the History row is disabled'; r.click(); return 'clicked'; })()")
+      if (why === 'clicked') run.history = await waitFor("!!document.querySelector('.bw-history')", { timeout: 4000 })
+      if (run.history) {
+        run.historyRow = await evaluate("([...document.querySelectorAll('.bw-history-row')].map((x) => (x.textContent || '').trim()).find((t) => /127\\.0\\.0\\.1/.test(t)) ?? '')")
+        await key({ key: 'Escape', code: 'Escape', vk: 27 })
+        await waitFor("!document.querySelector('.bw-history')", { timeout: 4000 })
+      }
+    }
+    record(
+      'History lists the address the pane loaded',
+      run.history && run.historyRow.length > 0,
+      run.history ? 'the row reads "' + run.historyRow + '"' : why,
+    )
+
+    await evaluate("document.querySelector('.bw-bar input')?.focus()")
+    await key({ key: 'Escape', code: 'Escape', vk: 27 })
+    await sleep(200)
+    run.stillThere = await evaluate("Boolean(document.querySelector('.bw-bar')) && Boolean(document.querySelector('.sidebar'))")
+    record(
+      'Escape in the address field keeps the pane and the console',
+      run.stillThere,
+      run.stillThere ? 'the pane and the sidebar are still drawn' : 'the pane or the sidebar disappeared after Escape',
+    )
+  } catch (err) {
+    skip('the browser surfaces', 'the drive threw: ' + (err?.message ?? err))
+  }
+}
 const passed = results.filter((r) => r.pass).length
 console.log(
   `\n${passed} of ${results.length} checks passed${skips.length ? `, ${skips.length} skipped (${skips.map((s) => s.name).join(', ')})` : ''}`,
