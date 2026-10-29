@@ -40,6 +40,68 @@ fn store_error(e: openremote_core::store::StoreError) -> SupervisorError {
     }
 }
 
+/// The chats being moved right now. A second move of the same chat is refused
+/// rather than queued, so two moves never stop and restart one harness at once.
+fn moving_chats() -> &'static StdMutex<std::collections::HashSet<SessionId>> {
+    static MOVING: std::sync::OnceLock<StdMutex<std::collections::HashSet<SessionId>>> =
+        std::sync::OnceLock::new();
+    MOVING.get_or_init(Default::default)
+}
+
+/// A chat's place in [`moving_chats`], given back however its move ends.
+struct Moving(SessionId);
+
+impl Drop for Moving {
+    fn drop(&mut self) {
+        lock_recovering(moving_chats()).remove(&self.0);
+    }
+}
+
+/// Moving needs a quiet chat: a turn in flight would be cut off mid-work.
+/// `live` is whether the harness is up. A chat "starting" with its harness up
+/// is only waiting for its first message (claude, grok and agy name their
+/// conversation then) and moves like an idle one; starting with no harness yet
+/// is a spawn still under way in the folder it had, and that is refused.
+fn refuse_busy(session: &Session, live: bool) -> Result<(), SupervisorError> {
+    match session.status {
+        SessionStatus::Working | SessionStatus::Waiting => Err(SupervisorError::Conflict(
+            "a turn is running in this chat - wait for it to finish, or stop it, then move the chat"
+                .into(),
+        )),
+        SessionStatus::Starting if !live => Err(SupervisorError::Conflict(
+            "this chat is starting - try again in a moment".into(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// A folder as the UI names a project: its last part.
+fn folder_name(folder: &std::path::Path) -> String {
+    folder
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| folder.display().to_string())
+}
+
+/// The line the transcript keeps where the chat moved.
+fn move_note(before: &Session, target: Option<&std::path::Path>) -> String {
+    match (target, &before.workspace) {
+        (Some(folder), _) => format!(
+            "Moved to {}. From the next message the agent works in {}.",
+            folder_name(folder),
+            folder.display()
+        ),
+        (None, Some(old)) => format!(
+            "Moved out of {}. From the next message the agent works in the home folder.",
+            folder_name(old)
+        ),
+        (None, None) => {
+            "Moved out of its project. From the next message the agent works in the home folder."
+                .to_string()
+        }
+    }
+}
+
 /// `HH:MM` in the machine's own wall clock, plus the day-minute key the
 /// engine arms per rule (one fire per day at its time).
 fn current_local_minute() -> (String, String) {
@@ -1941,6 +2003,105 @@ impl Supervisor {
         self.session(id)
     }
 
+    /// Move a chat into `project`, one of this machine's projects, or out of
+    /// every project with `None` - it then works in the home folder.
+    ///
+    /// A chat with a turn in flight is refused: the turn would be cut off
+    /// mid-work. A chat whose harness is up but idle stops and starts again in
+    /// the new folder, ready for its next message; a stopped one starts there
+    /// when it is resumed. The chat's own transcript is the daemon's and does
+    /// not move with it; the harness's conversation is the harness's to find
+    /// again, and a move never rewrites its files.
+    pub async fn move_chat(
+        self: &Arc<Self>,
+        id: &SessionId,
+        project: Option<&ProjectId>,
+    ) -> Result<Session, SupervisorError> {
+        self.ensure_here(id)?;
+        let target = match project {
+            None => None,
+            Some(project) => {
+                let folders = self
+                    .with_store(|s| s.project(project).map(|p| p.folders.clone()))
+                    .map_err(|_| {
+                        SupervisorError::NotFound(
+                            "that project isn't registered on this machine".into(),
+                        )
+                    })?;
+                let session = self.session(id)?;
+                if session
+                    .workspace
+                    .as_ref()
+                    .is_some_and(|folder| folders.contains(folder))
+                {
+                    return Ok(session);
+                }
+                let folder = folders.first().cloned().ok_or_else(|| {
+                    SupervisorError::Conflict("that project has no folder".into())
+                })?;
+                if !folder.is_dir() {
+                    return Err(SupervisorError::Conflict(format!(
+                        "{} isn't a folder on this machine any more",
+                        folder.display()
+                    )));
+                }
+                Some(folder)
+            }
+        };
+        if target.is_none() && self.session(id)?.workspace.is_none() {
+            return self.session(id);
+        }
+        // A turn that opens while the project is looked up still wins: the
+        // rule runs again under the move slot, just before the stop.
+        refuse_busy(&self.session(id)?, self.entry(id).await.is_ok())?;
+        let _moving = {
+            let mut moving = lock_recovering(moving_chats());
+            if !moving.insert(*id) {
+                return Err(SupervisorError::Conflict(
+                    "this chat is already moving".into(),
+                ));
+            }
+            Moving(*id)
+        };
+        let live = self.entry(id).await.is_ok();
+        refuse_busy(&self.session(id)?, live)?;
+        if live {
+            match self.stop(id).await {
+                // Stopped by someone else meanwhile: just as quiet.
+                Ok(_) | Err(SupervisorError::NotFound(_)) => {}
+                Err(err) => return Err(err),
+            }
+        }
+        let before = self.session(id)?;
+        let note = move_note(&before, target.as_deref());
+        let session = self
+            .with_store(|s| s.set_session_workspace(id, target.clone()))
+            .map_err(store_error)?;
+        self.emit_all(
+            id,
+            vec![
+                EventPayload::NoteAdded { text: note },
+                EventPayload::SessionUpdated {
+                    session: session.clone(),
+                },
+            ],
+        )?;
+        if live {
+            if let Err(err) = self.resume(id).await {
+                // The move stands: the chat says why it could not start in the
+                // new folder, and Resume tries again.
+                let _ = self.emit_all(
+                    id,
+                    vec![EventPayload::SessionStatusChanged {
+                        status: SessionStatus::Failed,
+                        reason: Some(format!("couldn't start in the new folder: {err}")),
+                    }],
+                );
+            }
+        }
+        self.session(id)
+    }
+
     /// Answer a pending decision: route it to the harness with its own
     /// correlation id and choice word, record it, and let the turn continue
     /// (or settle, when the choice interrupts it).
@@ -2622,6 +2783,57 @@ mod tests {
         // the directory outlives the run as junk in temp. No cleanup to
         // race.
         supervisor
+    }
+
+    /// The move's quiet-chat rule, including the case a route test cannot
+    /// catch: a spawn still under way. A chat whose harness is up and only
+    /// waiting for its first message moves; one with no harness yet does not.
+    #[test]
+    fn a_chat_spawning_is_refused_and_one_waiting_for_its_first_message_is_not() {
+        let session = |status: SessionStatus| Session {
+            id: SessionId::new(),
+            harness: "claude".into(),
+            workspace: None,
+            status,
+            model: None,
+            endpoint_id: None,
+            effort: None,
+            permission_mode: None,
+            harness_session_ref: None,
+            created_at: 0,
+            updated_at: 0,
+            last_error: None,
+            next_turn: 0,
+            fast: false,
+            approved_tools: Vec::new(),
+            executor: None,
+            title: None,
+            queue: Vec::new(),
+            queue_paused: false,
+            mentioned_chats: Vec::new(),
+        };
+        // A spawn still under way is refused, and the word says why.
+        let err = refuse_busy(&session(SessionStatus::Starting), false).unwrap_err();
+        assert!(err.to_string().contains("this chat is starting"), "{err}");
+        // The same status with the harness up is only waiting for its first
+        // message (claude, grok and agy name their conversation then).
+        assert!(refuse_busy(&session(SessionStatus::Starting), true).is_ok());
+        // A turn in flight is refused, whatever the process is doing.
+        for status in [SessionStatus::Working, SessionStatus::Waiting] {
+            let err = refuse_busy(&session(status), true).unwrap_err();
+            assert!(
+                err.to_string().contains("a turn is running in this chat"),
+                "{err}"
+            );
+        }
+        // Everything else moves.
+        for status in [
+            SessionStatus::Idle,
+            SessionStatus::Stopped,
+            SessionStatus::Failed,
+        ] {
+            assert!(refuse_busy(&session(status), true).is_ok(), "{status:?}");
+        }
     }
 
     /// A schedule rule on this machine, saved through the real path.

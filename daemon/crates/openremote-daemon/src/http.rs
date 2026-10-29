@@ -264,6 +264,7 @@ fn api_routes() -> Router<Arc<App>> {
         .route("/sessions/{id}/steer", post(post_steer))
         .route("/sessions/{id}/settings", post(post_settings))
         .route("/sessions/{id}/endpoint", post(post_session_endpoint))
+        .route("/sessions/{id}/workspace", post(post_workspace))
         .route("/sessions/{id}/interrupt", post(post_interrupt))
         .route("/sessions/{id}/stop", post(post_stop))
         .route("/sessions/{id}/resume", post(post_resume))
@@ -776,6 +777,39 @@ async fn post_session_endpoint(
             supervisor_error(err)
         }
     }
+}
+
+#[derive(Deserialize)]
+struct WorkspaceBody {
+    request_id: String,
+    /// One of this machine's projects; null (or absent) moves the chat out of
+    /// every project, into the home folder.
+    #[serde(default)]
+    project_id: Option<String>,
+}
+
+/// Move a chat to another project: from its next message its agent works in
+/// that project's folder. A chat with a turn in flight is refused with the
+/// words the console shows; a chat whose harness is up and idle restarts in
+/// the new folder.
+async fn post_workspace(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<WorkspaceBody>,
+) -> Response {
+    let project = match body.project_id.as_deref().filter(|p| !p.is_empty()) {
+        None => None,
+        Some(raw) => match openremote_core::ProjectId::parse(raw) {
+            Some(project) => Some(project),
+            None => return error(StatusCode::BAD_REQUEST, "bad project id"),
+        },
+    };
+    let sup = Arc::clone(&app.supervisor);
+    receipted(&app, body.request_id, &id, |sid| async move {
+        let session = sup.move_chat(&sid, project.as_ref()).await?;
+        Ok(serde_json::to_value(&session).unwrap_or(Value::Null))
+    })
+    .await
 }
 
 // ---- harness sign-in ----

@@ -1152,6 +1152,27 @@ impl Store {
         Ok(updated)
     }
 
+    /// Point a chat at another folder: a project move (`Some`), or out of
+    /// every project into the home folder (`None`). A live harness keeps
+    /// working where it is until its owner restarts it there; the supervisor's
+    /// move stops and resumes it, so this write is only the fact.
+    pub fn set_session_workspace(
+        &mut self,
+        id: &SessionId,
+        workspace: Option<PathBuf>,
+    ) -> Result<Session, StoreError> {
+        let session = self
+            .state
+            .sessions
+            .get_mut(id)
+            .ok_or_else(|| StoreError::NotFound(format!("session {id}")))?;
+        session.workspace = workspace;
+        session.updated_at = crate::now_ms();
+        let updated = session.clone();
+        self.persist()?;
+        Ok(updated)
+    }
+
     // ---- automations ----
 
     pub fn rules(&self) -> Vec<&AutomationRule> {
