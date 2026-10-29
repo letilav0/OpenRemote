@@ -636,3 +636,58 @@ html[data-reduce-motion] .bw-btn {
   border-color: var(--accent);
   color: var(--text-1);
 }
+/* ---- history ---- */
+.bw-history {
+  width: 560px;
+  max-width: calc(100vw - 32px);
+}
+.bw-history-list {
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+  margin-top: 4px;
+}
+.bw-history-day + .bw-history-day {
+  margin-top: 14px;
+}
+.bw-history-label {
+  margin: 0 0 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.bw-history-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-1);
+  text-align: left;
+  cursor: default;
+}
+.bw-history-row:hover {
+  background: var(--bg-hover);
+}
+.bw-history-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.bw-history-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.bw-history-empty {
+  margin: 14px 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+}

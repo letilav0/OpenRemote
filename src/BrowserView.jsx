@@ -18,6 +18,7 @@ import {
   Crosshair,
   DeviceMobile,
   DotsThreeVertical,
+  ClockCounterClockwise,
   DownloadSimple,
   Globe,
   Lock,
@@ -36,13 +37,14 @@ import { PICKER_CANCEL, PICKER_SOURCE, formatPicked } from './browser-pick.js'
 import { insertToComposer } from './composer-insert.js'
 import { omnibox, security, shownAddress } from './browser-omnibox.js'
 import { closeOthers, closeTab, closeToRight, cycle, canUse, extrasMissing, newTab, openBelongs, rememberClosed, stripPlan, takeClosed, tabTitle } from './browser-tabs.js'
-import { adopt, call, getState, onKey, patchTab, registerReopen, removeBookmark, saveBookmark, setState, subscribe, updateBookmark } from './browser-store.js'
+import { adopt, call, clearHistory, getState, onKey, patchTab, recordVisit, registerReopen, removeBookmark, saveBookmark, setState, subscribe, updateBookmark } from './browser-store.js'
 import { FLOATING, covered } from './browser-occlusion.js'
 import { DEVICES, fitDevice, fileName, nextZoom, zoomLabel } from './browser-chrome.js'
 import ContextMenu from './ContextMenu.jsx'
 import { bookmarkFor, labelFor } from './browser-bookmarks.js'
 import BrowserBookmarksBar from './BrowserBookmarksBar.jsx'
 import BrowserBookmarkEditor from './BrowserBookmarkEditor.jsx'
+import BrowserHistoryModal from './BrowserHistoryModal.jsx'
 import './browser.css'
 
 // The app's own global keys pressed while a page had focus: handed to the
@@ -101,7 +103,7 @@ function anchorOf(el) {
 // ---- the view ----
 
 export default function BrowserView({ onClosePane = null, askToShow = null }) {
-  const { tabs, active, downloads, finds, closed, features, bookmarks } = useSyncExternalStore(subscribe, getState)
+  const { tabs, active, downloads, finds, closed, features, bookmarks, history } = useSyncExternalStore(subscribe, getState)
   const current = tabs.find((t) => t.key === active) ?? tabs[0]
   const pageRef = useRef(null)
   const addressRef = useRef(null)
@@ -115,6 +117,7 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
   // The star's small editor: the bookmark it opened on, and whether the star
   // just made it (a fresh bookmark says so in the title).
   const [editor, setEditor] = useState(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
   // Element picking: the page waits for a click, and the pick lands in
   // the chat. `notice` is the pane's own confirm - it sits in the chrome,
   // never over the page.
@@ -470,6 +473,16 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
     setEditor(null)
   }
 
+  // A visit is recorded when the pane shows a page, not on every picture
+  // update: the address and its title, and the pure rule folds the title that
+  // lands a moment later into the same visit. A tab with no address (the new
+  // tab page) has not been anywhere yet.
+  useEffect(() => {
+    const url = current?.url
+    if (!url || !/^https?:\/\//i.test(url)) return
+    recordVisit({ url, title: current?.title ?? '' })
+  }, [active, current?.url, current?.title])
+
   const close = (key) => {
     const tab = getState().tabs.find((t) => t.key === key)
     if (tab?.native) call('browser_close', { tab: tab.native })
@@ -799,6 +812,7 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
         },
         { divider: true },
         { label: 'Downloads', icon: <DownloadSimple size={14} />, hint: 'Ctrl+J', onSelect: () => setTimeout(() => setMenu({ kind: 'downloads', ...anchorFor('downloads') }), 0) },
+        { label: 'History', icon: <ClockCounterClockwise size={14} />, disabled: !history.length, onSelect: () => setHistoryOpen(true) },
         { label: 'Open in your default browser', icon: <ArrowSquareOut size={14} />, disabled: !live || !/^https?:/.test(current?.url ?? ''), onSelect: () => call('browser_open_external', { url: current.url }) },
         ...(import.meta.env.DEV
           ? [{
@@ -1234,6 +1248,17 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
         )}
       </div>
 
+      {historyOpen && (
+        <BrowserHistoryModal
+          entries={history}
+          onOpen={(url) => {
+            setHistoryOpen(false)
+            openUrl(url)
+          }}
+          onClear={clearHistory}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
       {editor && (
         <BrowserBookmarkEditor
           mark={editor.mark}

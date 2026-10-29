@@ -302,6 +302,13 @@ spacing.
   holds Other bookmarks at its end, and appears only while something is kept;
   Remove is the editor's own second press and the safe answer (Done) is the
   primary. No bookmark is sent anywhere, and none of them needs an account.
+  History is this window's reading record, drawn by the console and grouped by the
+  day it happened (Today, Yesterday, then the date), newest first. A visit is
+  recorded as the pane shows a page - its address and its title - so a title
+  that lands late updates that visit instead of making a second one, and the
+  same address twice in a row is one entry. A row opens its address in the tab,
+  and Clear history asks once before it empties the list; the pane's own menu
+  opens the list. Five hundred entries per window, on this computer only.
 - **Text fields:** right-clicking a field opens the console's own menu - Cut,
   Copy, Paste, Select all - because the engine's default menu is off for the
   whole app. A field never has two menus, and the words on the one it has are
