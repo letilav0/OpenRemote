@@ -42,6 +42,8 @@ import { FLOATING, covered } from './browser-occlusion.js'
 import { DEVICES, fitDevice, fileName, nextZoom, zoomLabel } from './browser-chrome.js'
 import ContextMenu from './ContextMenu.jsx'
 import { bookmarkFor, labelFor } from './browser-bookmarks.js'
+import { shownVisitUrl, visitLabel } from './browser-history.js'
+import { recentFor } from './browser-newtab.js'
 import BrowserBookmarksBar from './BrowserBookmarksBar.jsx'
 import BrowserBookmarkEditor from './BrowserBookmarkEditor.jsx'
 import BrowserHistoryModal from './BrowserHistoryModal.jsx'
@@ -106,6 +108,10 @@ function anchorOf(el) {
 export default function BrowserView({ onClosePane = null, askToShow = null }) {
   const { tabs, active, downloads, finds, closed, features, bookmarks, history } = useSyncExternalStore(subscribe, getState)
   const current = tabs.find((t) => t.key === active) ?? tabs[0]
+  // What the new tab page shows under its search box: the same reading record
+  // the history list draws, newest first, one row per address, six at most.
+  // browser-newtab.js owns the rule, and a private tab never reaches history.
+  const recent = recentFor(history)
   const pageRef = useRef(null)
   const addressRef = useRef(null)
   const findRef = useRef(null)
@@ -494,10 +500,15 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
   // lands a moment later into the same visit. A tab with no address (the new
   // tab page) has not been anywhere yet.
   useEffect(() => {
+    // A private tab is kept from this window's history (DESIGN.md): it is
+    // recorded nowhere, so the record cannot name a page the person read in
+    // private, and the new tab page's recent list cannot either. The shell
+    // says which tabs those are, and browser-store carries the flag.
+    if (current?.private) return
     const url = current?.url
     if (!url || !/^https?:\/\//i.test(url)) return
     recordVisit({ url, title: current?.title ?? '' })
-  }, [active, current?.url, current?.title])
+  }, [active, current?.url, current?.title, current?.private])
 
   const close = (key) => {
     const tab = getState().tabs.find((t) => t.key === key)
@@ -1274,16 +1285,38 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
         <img ref={pictureRef} className="bw-picture" alt="" />
         {!live && (
           <div className="bw-ntp">
-            <form
-              className="bw-ntp-search"
-              onSubmit={(e) => {
-                e.preventDefault()
-                go(e.currentTarget.elements.q.value)
-              }}
-            >
-              <MagnifyingGlass size={18} className="bw-ntp-icon" />
-              <input name="q" placeholder="Search Google or type a URL" spellCheck={false} autoFocus />
-            </form>
+            <div className="bw-ntp-col">
+              <form
+                className="bw-ntp-search"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  go(e.currentTarget.elements.q.value)
+                }}
+              >
+                <MagnifyingGlass size={18} className="bw-ntp-icon" />
+                <input name="q" placeholder="Search Google or type a URL" spellCheck={false} autoFocus />
+              </form>
+              {recent.length > 0 && (
+                // The addresses this window has read, newest first: the same
+                // record the history list draws, so a private tab is not here
+                // (it was never recorded). A row opens in this tab.
+                <section className="bw-ntp-recent" aria-label="Recent">
+                  <h2 className="bw-ntp-recent-label">Recent</h2>
+                  {recent.map((entry) => (
+                    <button
+                      key={entry.url}
+                      type="button"
+                      className="bw-history-row bw-ntp-recent-row"
+                      title={entry.url}
+                      onClick={() => openUrl(entry.url)}
+                    >
+                      <span className="bw-history-title">{visitLabel(entry)}</span>
+                      <span className="bw-history-url">{shownVisitUrl(entry.url)}</span>
+                    </button>
+                  ))}
+                </section>
+              )}
+            </div>
           </div>
         )}
       </div>

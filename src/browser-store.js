@@ -208,6 +208,10 @@ function fieldsOf(p) {
     favicon: p.favicon,
     canBack: p.can_back,
     canForward: p.can_forward,
+    // The shell says whether the tab is private; the console needs it to keep
+    // a private page out of history (BrowserView's visit effect) and to say so
+    // in the strip. Absent means normal, which is what the shell sends for one.
+    private: p.private === true,
   }
 }
 
