@@ -505,6 +505,13 @@ pub fn browser_reload(app: AppHandle, tab: String) -> Result<(), String> {
 }
 
 /// A part of a page, in its own CSS pixels (relative to what's in view).
+///
+/// Its fields are read only where a picture can be taken, which is the Windows
+/// engine; the other platforms accept the argument and answer that a picture is
+/// not available yet, so the four numbers are never read there. The allow says
+/// that, and it is scoped so that a field becoming unread on Windows still
+/// fails the lint.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Deserialize)]
 pub struct Clip {
     pub x: f64,
