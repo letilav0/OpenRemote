@@ -412,15 +412,49 @@
   position: absolute;
   inset: 0;
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
   padding-top: 20vh;
   background: var(--bg-app);
 }
 
+/* The search box and the recent list share one column, so a row's address
+   line sits under the field it belongs to rather than wider than it. */
+.bw-ntp-col {
+  display: flex;
+  flex-direction: column;
+  width: min(600px, 100% - 32px);
+}
+
 .bw-ntp-search {
   position: relative;
-  width: min(600px, 100% - 32px);
+  width: 100%;
+}
+
+/* A handful of the addresses this window has read, under the field. The rows
+   are the history list's own, so the quiet address line is the same one. */
+.bw-ntp-recent {
+  display: flex;
+  flex-direction: column;
+  margin-top: 22px;
+}
+
+.bw-ntp-recent-label {
+  margin: 0 0 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.bw-ntp-recent-row {
+  padding: 6px 8px;
+}
+
+.bw-ntp-recent-row:hover {
+  background: var(--bg-hover);
 }
 
 .bw-ntp-icon {

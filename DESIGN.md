@@ -306,9 +306,16 @@ spacing.
   day it happened (Today, Yesterday, then the date), newest first. A visit is
   recorded as the pane shows a page - its address and its title - so a title
   that lands late updates that visit instead of making a second one, and the
-  same address twice in a row is one entry. A row opens its address in the tab,
-  and Clear history asks once before it empties the list; the pane's own menu
-  opens the list. Five hundred entries per window, on this computer only.
+  same address twice in a row is one entry. A private tab is never recorded, so
+  neither the history list nor anything reading it can name a page read in it.
+  A row opens its address in the tab, and Clear history asks once before it
+  empties the list; the pane's own menu opens the list. Five hundred entries per
+  window, on this computer only.
+  The new tab page is a search box and a short Recent list under it: the
+  addresses this window has read, newest first, one row per address, six at
+  most, drawn with the same quiet address line the history list uses and each
+  opening in the tab. It is that same record, so nothing in it was read in a
+  private tab, and nothing on the page is fetched or sent.
   The address bar suggests as a prefix is typed, from the two lists this device
   kept and read: an exact prefix on a title ranks above the same letters inside
   one, a kept address above a plain history hit of the same quality, and among
