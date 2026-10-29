@@ -115,6 +115,12 @@ pub struct Bounds {
 
 /// A browser key pressed while a page had focus: the page never sees it
 /// and the console acts on it (`Mod+T`, the app's own `Mod+K`...).
+///
+/// Built only by the Windows backend, where WebView2's accelerator handler is
+/// what reports the key; the other platforms let the console's own listener
+/// see it, so on Linux this type is declared and never constructed, which
+/// `-D warnings` reads as dead code. The allow is that fact, not a silence.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Clone, Debug, Serialize)]
 pub struct KeyPress {
     pub tab: String,
@@ -206,6 +212,11 @@ fn update(app: &AppHandle, id: &str, change: impl FnOnce(&mut Tab)) {
 
 /// A page went fullscreen (a video's button) or came back: the whole
 /// window follows, and the console hides its chrome.
+///
+/// Only the Windows engine reports it, so on the other platforms nothing calls
+/// this. The allow says that, rather than hiding a function that became dead
+/// on Windows too.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn fullscreen_changed(app: &AppHandle, tab: &str, on: bool) {
     update(app, tab, |t| t.fullscreen = on);
     if let Some(window) = app.get_window(CONSOLE) {
