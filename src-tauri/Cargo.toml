@@ -27,6 +27,12 @@ tauri = { version = "~2.12", features = ["tray-icon", "unstable"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-shell = "2"
 tokio = { version = "1", features = ["sync", "time"] }
+# The browser module is desktop-only, and its pictures travel as data URLs on
+# every desktop: a page's icon on Windows, and the file the console saves into
+# Downloads everywhere. It lives here rather than under Windows because
+# `browser_save_file` is not Windows-only, and a windows-only declaration is
+# what kept the Linux and macOS builds from compiling after the browser landed.
+base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 # The browser drives each tab's WebView2 directly (the DevTools protocol,
@@ -34,8 +40,6 @@ tokio = { version = "1", features = ["sync", "time"] }
 # new ships.
 webview2-com = "0.39"
 windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Input_KeyboardAndMouse"] }
-# A page's icon reaches the console as a data URL.
-base64 = "0.22"
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 # A second launch shows the running window instead of starting a second
