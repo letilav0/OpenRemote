@@ -7,11 +7,13 @@
 import { hasTauri, isMobile } from './platform.js'
 import { insertAfter, newTab, popupBelongs } from './browser-tabs.js'
 import { bookmarkFor, inFolder, positionAt, stepPosition, withBookmark, withoutBookmark } from './browser-bookmarks.js'
+import { HISTORY_CAP, recordVisit as pushVisit } from './browser-history.js'
 
-// Bookmarks stay on this device: they live in this store and in this
-// console's own localStorage, never in the account, because bookmarks are a
+// Bookmarks and history stay on this device: they live in this store and in
+// this console's own localStorage, never in the account, because they are a
 // reading record of one person at one keyboard and nothing here is synced.
 const BOOKMARKS_KEY = 'openremote-browser-bookmarks'
+const HISTORY_KEY = 'openremote-browser-history'
 
 function loadBookmarks() {
   try {
@@ -31,6 +33,24 @@ function storeBookmarks(marks) {
   }
 }
 
+function loadHistory() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '{"visits":[]}')
+    if (!Array.isArray(raw?.visits)) return []
+    return raw.visits.filter((v) => v && typeof v.url === 'string' && v.url).slice(0, HISTORY_CAP)
+  } catch {
+    return []
+  }
+}
+
+function storeHistory(visits) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify({ v: 1, visits }))
+  } catch {
+    // No storage: the list still lives for this window.
+  }
+}
+
 function newBookmarkId() {
   return `bm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
@@ -45,6 +65,7 @@ let state = (() => {
     finds: {},
     features: null,
     bookmarks: loadBookmarks(),
+    history: loadHistory(),
   }
 })()
 const listeners = new Set()
@@ -285,6 +306,24 @@ export function browserMounted() {
 
 export function reopenClosed() {
   reopenHandler?.()
+}
+
+// ---- history (this device only) ----
+
+// Called as the pane shows a page. The same address twice in a row is one
+// visit, so a title landing a moment later updates the row rather than adding
+// a second one; the pure rule owns both facts.
+export function recordVisit({ url, title = '', at = Date.now() } = {}) {
+  const before = getState().history
+  const visits = pushVisit(before, { url, title, at })
+  if (visits === before) return
+  setState(() => ({ history: visits }))
+  storeHistory(visits)
+}
+
+export function clearHistory() {
+  setState(() => ({ history: [] }))
+  storeHistory([])
 }
 
 // Editing this module in development reloads the console (the restore
