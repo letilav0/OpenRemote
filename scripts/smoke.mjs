@@ -290,7 +290,21 @@ record(
 
 // Focus the tile the way a person would, so the palette has somewhere to
 // return to after Escape (check 4).
-if (newChat) await click(newChat.x, newChat.y)
+// Pin the focus the palette hands back to. The window can start with the
+// browser pane open and its address field focused, which covers this spot and
+// is not a stable opener; any overlay is dismissed first, and the tile is
+// focused again after the navigation settles, because the view re-render
+// can replace the node the click landed on.
+await key({ key: 'Escape', code: 'Escape', vk: 27 })
+if (await evaluate("!!document.querySelector('.bw-bar input')")) {
+  await key({ key: 'b', code: 'KeyB', vk: 66, modifiers: 2 | 8 })
+  await waitFor("!document.querySelector('.bw-bar input')", { timeout: 5000 })
+}
+if (newChat) {
+  await click(newChat.x, newChat.y)
+  await waitFor("location.hash === '#new'", { timeout: 5000 })
+  await evaluate("(() => { const b = [...document.querySelectorAll('.sidebar button')].find((x) => (x.textContent || '').trim() === 'New chat'); if (!b) return false; b.focus(); return document.activeElement === b; })()")
+}
 const opener = await evaluate(`(() => {
   const a = document.activeElement;
   if (!a || a === document.body) return null;
