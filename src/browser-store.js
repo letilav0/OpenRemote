@@ -67,7 +67,14 @@ async function browserCall(method, path, body = null) {
     } catch {
       answer = null
     }
-    if (!response.ok) throw new Error(answer?.error ?? `HTTP ${response.status}`)
+    if (!response.ok) {
+      const failure = new Error(answer?.error ?? `HTTP ${response.status}`)
+      // The status is kept because a 404 is not the same fact as silence: it
+      // means this daemon does not know the route (an older build), and the
+      // sentence the person reads should say that rather than "no answer".
+      failure.status = response.status
+      throw failure
+    }
     return answer
   } catch (err) {
     if (abort.timedOut) throw new Error('The daemon did not answer in time.')
@@ -83,24 +90,48 @@ function requestId() {
 
 // A change the daemon did not take goes back to the list as it was, and the
 // bar says the list is what it last saw rather than showing a save that never
-// happened.
-function unsaved(fallback) {
-  setState(() => ({ bookmarks: fallback, bookmarksStale: true }))
+// happened. The reason is the daemon's, sorted into three facts a person can
+// act on.
+function noteFor(err) {
+  const status = err?.status
+  if (status === 404) return 'Bookmarks are the list this window last saw: this daemon does not keep them yet.'
+  if (status) return `Bookmarks are the list this window last saw: ${err.message}`
+  return 'Bookmarks are the list this window last saw: the daemon did not answer.'
+}
+
+function unsaved(err, fallback) {
+  setState(() => ({ bookmarks: fallback, bookmarksStale: true, bookmarksNote: noteFor(err) }))
   storeBookmarks(fallback)
+}
+
+async function readBookmarks() {
+  const answer = await browserCall('GET', '/browser/bookmarks')
+  return Array.isArray(answer?.bookmarks) ? answer.bookmarks : []
 }
 
 // The daemon's rows replace the cache. Called on the first subscriber (the
 // browser view mounting) and after a change it made.
 export async function refreshBookmarks() {
   try {
-    const answer = await browserCall('GET', '/browser/bookmarks')
-    const marks = Array.isArray(answer?.bookmarks) ? answer.bookmarks : []
-    setState(() => ({ bookmarks: marks, bookmarksStale: false }))
+    let marks = await readBookmarks()
+    // The rows this window could already show, from before the daemon kept
+    // them: an update must never empty a bar that was full. When the daemon
+    // holds none, the cache is pushed once, and the daemon is the truth after.
+    if (marks.length === 0) {
+      const cached = loadBookmarks()
+      if (cached.length > 0) {
+        for (const mark of cached) {
+          await browserCall('POST', '/browser/bookmarks', { request_id: requestId(), ...mark }).catch(() => {})
+        }
+        marks = await readBookmarks().catch(() => cached)
+      }
+    }
+    setState(() => ({ bookmarks: marks, bookmarksStale: false, bookmarksNote: null }))
     storeBookmarks(marks)
     return true
-  } catch {
+  } catch (err) {
     // Keep what the person can see, and say it is the cache.
-    setState(() => ({ bookmarksStale: true }))
+    setState(() => ({ bookmarksStale: true, bookmarksNote: noteFor(err) }))
     return false
   }
 }
@@ -109,10 +140,10 @@ async function writeBookmark(mark, fallback) {
   try {
     await browserCall('POST', '/browser/bookmarks', { request_id: requestId(), ...mark })
     const marks = getState().bookmarks
-    setState(() => ({ bookmarksStale: false }))
+    setState(() => ({ bookmarksStale: false, bookmarksNote: null }))
     storeBookmarks(marks)
-  } catch {
-    unsaved(fallback)
+  } catch (err) {
+    unsaved(err, fallback)
   }
 }
 
@@ -122,10 +153,10 @@ async function unwriteBookmark(id, fallback) {
       request_id: requestId(),
     })
     const marks = getState().bookmarks
-    setState(() => ({ bookmarksStale: false }))
+    setState(() => ({ bookmarksStale: false, bookmarksNote: null }))
     storeBookmarks(marks)
-  } catch {
-    unsaved(fallback)
+  } catch (err) {
+    unsaved(err, fallback)
   }
 }
 
@@ -162,8 +193,10 @@ let state = (() => {
     finds: {},
     features: null,
     bookmarks: loadBookmarks(),
-    // Whether the list is the daemon's, or only this window's last cache.
+    // Whether the list is the daemon's, or only this window's last cache, and
+    // the sentence that says which fact made it a cache.
     bookmarksStale: false,
+    bookmarksNote: null,
     history: loadHistory(),
   }
 })()

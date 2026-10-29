@@ -106,7 +106,7 @@ function anchorOf(el) {
 // ---- the view ----
 
 export default function BrowserView({ onClosePane = null, askToShow = null }) {
-  const { tabs, active, downloads, finds, closed, features, bookmarks, bookmarksStale, history } = useSyncExternalStore(subscribe, getState)
+  const { tabs, active, downloads, finds, closed, features, bookmarks, bookmarksStale, bookmarksNote, history } = useSyncExternalStore(subscribe, getState)
   const current = tabs.find((t) => t.key === active) ?? tabs[0]
   // What the new tab page shows under its search box: the same reading record
   // the history list draws, newest first, one row per address, six at most.
@@ -1028,9 +1028,11 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
 
       {bookmarksStale && (
         // The rows above are this window's last cache, not what the daemon
-        // holds: said plainly rather than showing a save that did not happen.
+        // holds: said plainly rather than showing a save that did not happen,
+        // and with the reason the store found (no answer, no route, or the
+        // daemon's own refusal).
         <p className="bw-marks-empty" role="status">
-          Bookmarks are the list this window last saw: the daemon did not answer.
+          {bookmarksNote ?? 'Bookmarks are the list this window last saw: the daemon did not answer.'}
         </p>
       )}
       {bookmarks.length > 0 && (

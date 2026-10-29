@@ -165,3 +165,57 @@ test('a new bookmark joins its folder, and a delete removes exactly that row', a
     delete globalThis.fetch
   }
 })
+
+test('a daemon with no bookmarks route says so, and one that is silent says that', async () => {
+  // An older daemon, which is what a console that updated before its sidecar
+  // sees: the route is not there, and "the daemon did not answer" would be a
+  // different (and untrue) fact.
+  daemonEnv(async () => ({ ok: false, status: 404, text: async () => '' }))
+  try {
+    assert.equal(await refreshBookmarks(), false)
+    assert.equal(getState().bookmarksStale, true)
+    assert.match(getState().bookmarksNote, /does not keep them yet/)
+  } finally {
+    delete globalThis.localStorage
+    delete globalThis.fetch
+  }
+  // No answer at all: the network never reached it.
+  daemonEnv(async () => {
+    throw new TypeError('fetch failed')
+  })
+  try {
+    assert.equal(await refreshBookmarks(), false)
+    assert.match(getState().bookmarksNote, /did not answer/)
+  } finally {
+    delete globalThis.localStorage
+    delete globalThis.fetch
+  }
+})
+
+test('the bookmarks this window already had move into the daemon that holds none', async () => {
+  // A window that kept its bookmarks before the daemon did: the rows it can
+  // already see are pushed once, so an update never empties a full bar.
+  const kept = [{ id: 'bm-kept', url: 'https://kept.test/', title: 'Kept', folder: 'bar', position: 1 }]
+  let held = []
+  const posted = []
+  const storage = daemonEnv(async (url, init) => {
+    if (init?.method === 'POST') {
+      const mark = JSON.parse(init.body)
+      posted.push(mark.url)
+      held = [...held, { ...mark, position: 1 }]
+      return ok({ bookmark: mark })()
+    }
+    return ok({ bookmarks: held })()
+  })
+  try {
+    storage.store.set('openremote-browser-bookmarks', JSON.stringify({ v: 1, marks: kept }))
+    setState(() => ({ bookmarks: kept }))
+    assert.equal(await refreshBookmarks(), true)
+    assert.deepEqual(posted, ['https://kept.test/'], 'the row was pushed once')
+    assert.deepEqual(getState().bookmarks.map((m) => m.url), ['https://kept.test/'], 'and the bar still holds it')
+    assert.equal(getState().bookmarksStale, false)
+  } finally {
+    delete globalThis.localStorage
+    delete globalThis.fetch
+  }
+})
