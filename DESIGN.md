@@ -537,7 +537,14 @@ Every screen the design specifies, backed by the real daemon:
   changeable only while stopped: start-time on every harness, so a
   stopped chat's change lands on resume), stop/resume, the floating
   composer with the ContextRing where the harness reports its window
-  (codex; claude reports usage but no window on the wire).
+  (codex; claude reports usage but no window on the wire). A harness that needs
+  its own sign-in gets a sheet rather than a wall of log: the login command runs
+  on the machine and its words stream in, the address it prints is the sheet's
+  one press (Open the sign-in page, in the person's own browser, with Copy
+  beside it and the host named in place of an unreadable authorize query), the
+  aside it prints about a headless machine is quoted under it, and every word it
+  said waits behind a press - folded while there is an address to act on, open
+  when there is not, because then the words are all there is.
 - **Machines** - Cloud's view of the account's devices (2026-10-07): this
   computer first with its "Make this computer a machine" row, then each
   device's card (platform, Machine/Desktop, version, online). A device's

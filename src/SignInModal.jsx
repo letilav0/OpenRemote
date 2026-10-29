@@ -1,16 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
-import { X } from '@phosphor-icons/react'
+import { ArrowSquareOut, Copy, X } from '@phosphor-icons/react'
 import { useConsole } from './state/console.jsx'
 import './signin.css'
 import { useBack } from './use-back.js'
 import { useDialog } from './dialog-focus.js'
 import { errorCopy } from './error-copy.js'
+import { addressLabel, readSignInWords } from './signin-words.js'
 
 // The harness's own sign-in, relayed. The daemon runs the CLI's own
 // login command on the machine; the CLI's words stream in here (the
 // browser URL it opened, the code it wants pasted), and the human's
 // answers ride back through the same relay. The words are the CLI's -
 // never ours.
+//
+// A login prints a wall: a notice, an authorize address hundreds of characters
+// long, sometimes an aside about headless machines. The sheet leads with the one
+// thing a person acts on - open that address - and keeps every word the harness
+// said behind a press, verbatim, for the times the reading and the words
+// disagree.
 export default function SignInModal({ harnessId, onDone, deviceId = null }) {
   useBack(true, onDone)
   const { signIn, feedSignIn, stopSignIn } = useConsole()
@@ -20,6 +27,12 @@ export default function SignInModal({ harnessId, onDone, deviceId = null }) {
   const [answer, setAnswer] = useState('')
   const [closing, setClosing] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [openError, setOpenError] = useState(null)
+  const [copied, setCopied] = useState(null)
+  // null means nobody has pressed yet: the words start open when there is no
+  // address to act on (then the words are all there is) and folded when there
+  // is one (then the button is the screen).
+  const [showWords, setShowWords] = useState(null)
   const transcriptRef = useRef(null)
 
   // One relay per modal: it starts the login and polls the beats until
@@ -48,6 +61,33 @@ export default function SignInModal({ harnessId, onDone, deviceId = null }) {
 
   const settled = view?.done ?? null
   const running = view ? !view.done : true
+  const read = readSignInWords(view?.lines)
+  const wordsOpen = showWords ?? !read.address
+
+  // Opening the address in the person's own browser: the one the CLI already
+  // tried to open, offered again for the case where it did not, and the system
+  // browser because that is where their sign-in already lives (a passkey, a
+  // session that outlived this window).
+  const openAddress = async () => {
+    setOpenError(null)
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('browser_open_external', { url: read.address })
+    } catch {
+      setOpenError('The browser did not open. Copy the link and open it yourself.')
+    }
+  }
+
+  const copyAddress = async () => {
+    setCopied(null)
+    try {
+      await navigator.clipboard.writeText(read.address)
+      setCopied('copied')
+    } catch {
+      // The clipboard is a permission, and a refusal is the person's to see.
+      setCopied('refused')
+    }
+  }
 
   const submit = async () => {
     if (!answer.trim()) return
@@ -110,14 +150,54 @@ export default function SignInModal({ harnessId, onDone, deviceId = null }) {
                 ? settled.ok
                   ? 'The harness answered with its own sign-in words.'
                   : `The login command finished on its own: ${settled.text}`
-                : 'The harness’s own login command is running - its words appear below. Finish in the browser it opened.'}
+                : read.address
+                  ? 'Finish this in your browser. The harness opened a page; this button opens it again.'
+                  : 'The harness’s own login command is running - its words appear below.'}
             </p>
-            <div className="si-transcript" ref={transcriptRef}>
-              {(view?.lines ?? []).map((line, i) => (
-                <div className="si-line" key={i}>{line}</div>
-              ))}
-              {running && <div className="si-line si-line--live">…</div>}
-            </div>
+
+            {read.address && (
+              <div className="si-open">
+                <button className="si-open-button" onClick={openAddress}>
+                  <ArrowSquareOut size={15} weight="bold" />
+                  Open the sign-in page
+                </button>
+                <div className="si-open-line">
+                  <span className="si-open-host" title={read.address}>
+                    {addressLabel(read.address)}
+                  </span>
+                  <button className="si-copy" onClick={copyAddress}>
+                    <Copy size={12} />
+                    {copied === 'copied' ? 'Copied' : copied === 'refused' ? 'Copy refused' : 'Copy link'}
+                  </button>
+                </div>
+                {openError && <p className="si-hint si-hint--error">{openError}</p>}
+              </div>
+            )}
+
+            {read.aside && <p className="si-aside">{read.aside}</p>}
+
+            {read.words.length > 0 && (
+              <button
+                type="button"
+                className="si-words-toggle"
+                aria-expanded={wordsOpen}
+                onClick={() => setShowWords(!wordsOpen)}
+              >
+                {wordsOpen
+                  ? 'Hide what the harness said'
+                  : `What the harness said (${read.words.length} line${read.words.length === 1 ? '' : 's'})`}
+              </button>
+            )}
+
+            {wordsOpen && (
+              <div className="si-transcript" ref={transcriptRef}>
+                {(view?.lines ?? []).map((line, i) => (
+                  <div className="si-line" key={i}>{line}</div>
+                ))}
+                {running && <div className="si-line si-line--live">…</div>}
+              </div>
+            )}
+
             {running && (
               <div className="si-answer">
                 <input

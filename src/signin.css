@@ -171,6 +171,105 @@
   opacity: 0.5;
 }
 
+/* The one thing a person acts on: the address the harness printed. It is its
+   own block because everything else on this sheet is words, and this is a
+   press. */
+.si-open {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.si-open-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  background: var(--accent);
+  color: #191307;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: default;
+}
+
+.si-open-button:hover {
+  background: #e8b05c;
+  border-color: #e8b05c;
+}
+
+.si-open-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* The host, because an authorize query string cannot be read by a person; the
+   whole address is the tooltip and Copy is the way to the rest of it. */
+.si-open-host {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'Geist Mono', ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.si-copy {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11.5px;
+  cursor: default;
+}
+
+.si-copy:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+/* The harness's own aside about a machine with no desktop: quoted, set apart
+   from the sheet's words, because it changes what the person should do. */
+.si-aside {
+  margin: 0 0 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.si-words-toggle {
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11.5px;
+  text-decoration: underline dotted;
+  cursor: default;
+}
+
+.si-words-toggle:hover {
+  color: var(--text-2);
+}
+
 /* The relay modal's fade and pop; both motion switches show it settled. */
 @media (prefers-reduced-motion: reduce) {
   .si-backdrop,
