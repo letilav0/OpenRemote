@@ -27,6 +27,7 @@ import {
   Plus,
   Printer,
   Trash,
+  Star,
   Warning,
   X,
 } from '@phosphor-icons/react'
@@ -35,10 +36,13 @@ import { PICKER_CANCEL, PICKER_SOURCE, formatPicked } from './browser-pick.js'
 import { insertToComposer } from './composer-insert.js'
 import { omnibox, security, shownAddress } from './browser-omnibox.js'
 import { closeOthers, closeTab, closeToRight, cycle, canUse, extrasMissing, newTab, openBelongs, rememberClosed, stripPlan, takeClosed, tabTitle } from './browser-tabs.js'
-import { adopt, call, getState, onKey, patchTab, registerReopen, setState, subscribe } from './browser-store.js'
+import { adopt, call, getState, onKey, patchTab, registerReopen, removeBookmark, saveBookmark, setState, subscribe, updateBookmark } from './browser-store.js'
 import { FLOATING, covered } from './browser-occlusion.js'
 import { DEVICES, fitDevice, fileName, nextZoom, zoomLabel } from './browser-chrome.js'
 import ContextMenu from './ContextMenu.jsx'
+import { bookmarkFor, labelFor } from './browser-bookmarks.js'
+import BrowserBookmarksBar from './BrowserBookmarksBar.jsx'
+import BrowserBookmarkEditor from './BrowserBookmarkEditor.jsx'
 import './browser.css'
 
 // The app's own global keys pressed while a page had focus: handed to the
@@ -97,7 +101,7 @@ function anchorOf(el) {
 // ---- the view ----
 
 export default function BrowserView({ onClosePane = null, askToShow = null }) {
-  const { tabs, active, downloads, finds, closed, features } = useSyncExternalStore(subscribe, getState)
+  const { tabs, active, downloads, finds, closed, features, bookmarks } = useSyncExternalStore(subscribe, getState)
   const current = tabs.find((t) => t.key === active) ?? tabs[0]
   const pageRef = useRef(null)
   const addressRef = useRef(null)
@@ -108,6 +112,9 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
   // stays in the page, so a picture is decoded in it before it shows.
   const pictureRef = useRef(null)
   const [menu, setMenu] = useState(null)
+  // The star's small editor: the bookmark it opened on, and whether the star
+  // just made it (a fresh bookmark says so in the title).
+  const [editor, setEditor] = useState(null)
   // Element picking: the page waits for a click, and the pick lands in
   // the chat. `notice` is the pane's own confirm - it sits in the chrome,
   // never over the page.
@@ -421,6 +428,48 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
     requestAnimationFrame(() => addressRef.current?.focus())
   }
 
+  // ---- bookmarks ----
+
+  // A bookmark's address, here or in a new tab (the bar's middle click and
+  // Ctrl+click come through the second form).
+  const openUrl = (url, { newTab: inNewTab = false } = {}) => {
+    if (!url) return
+    if (!inNewTab) {
+      go(url)
+      return
+    }
+    const tab = newTab()
+    setState((s) => ({ tabs: [...s.tabs, tab], active: tab.key }))
+    requestAnimationFrame(() => go(url))
+  }
+
+  // The star (and Ctrl+D): a page that is not bookmarked is bookmarked on the
+  // bar and the editor opens; a page that is bookmarked opens the editor for
+  // the bookmark that holds it. A tab with no address has nothing to keep.
+  const star = () => {
+    const tab = activeTab()
+    if (editor || !tab?.url) return
+    const kept = bookmarkFor(bookmarks, tab.url)
+    if (kept) {
+      setEditor({ mark: kept, fresh: false })
+      return
+    }
+    const saved = saveBookmark({ url: tab.url, title: tabTitle(tab), folder: 'bar' })
+    if (saved) setEditor({ mark: saved, fresh: true })
+  }
+
+  const finishEditing = ({ title, folder }) => {
+    if (!editor) return
+    updateBookmark(editor.mark.id, { title, folder })
+    setEditor(null)
+  }
+
+  const removeEdited = () => {
+    if (!editor) return
+    removeBookmark(editor.mark.id)
+    setEditor(null)
+  }
+
   const close = (key) => {
     const tab = getState().tabs.find((t) => t.key === key)
     if (tab?.native) call('browser_close', { tab: tab.native })
@@ -664,6 +713,7 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
     'Mod+T': openTab,
     'Mod+W': () => close(getState().active),
     'Mod+L': focusAddress,
+    'Mod+D': star,
     'Mod+R': () => onNative('browser_reload'),
     F5: () => onNative('browser_reload'),
     'Mod+F': openFind,
@@ -780,6 +830,23 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
         { divider: true },
         ...(zoomed ? [{ label: `Zoom ${zoomLabel(current.zoom)}: reset`, icon: <ArrowsClockwise size={14} />, onSelect: () => zoom(0) }] : []),
         { label: 'Clear cookies and site data', icon: <Trash size={14} />, hint: can('clearSite') ? '' : 'Not in this build', danger: true, disabled: !can('clearSite'), onSelect: () => onNative('browser_clear_site') },
+      ]
+    }
+    if (menu.kind === 'mark') {
+      const m = menu.mark
+      return [
+        { header: labelFor(m) },
+        { label: 'Open', icon: <ArrowRight size={14} />, onSelect: () => openUrl(m.url) },
+        { label: 'Open in a new tab', icon: <Plus size={14} />, onSelect: () => openUrl(m.url, { newTab: true }) },
+        { divider: true },
+        { label: 'Edit', onSelect: () => setEditor({ mark: m, fresh: false }) },
+        { label: 'Remove', icon: <Trash size={14} />, danger: true, onSelect: () => removeBookmark(m.id) },
+      ]
+    }
+    if (menu.kind === 'marks') {
+      return [
+        { header: 'Bookmarks' },
+        ...(menu.marks ?? []).map((m) => ({ label: labelFor(m), onSelect: () => openUrl(m.url) })),
       ]
     }
     if (menu.kind === 'downloads') {
@@ -918,6 +985,16 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
         )}
       </div>
 
+      {bookmarks.length > 0 && (
+        <BrowserBookmarksBar
+          marks={bookmarks}
+          precapture={precapture}
+          onOpen={openUrl}
+          onMenu={(m, e) => setMenu({ kind: 'mark', mark: m, x: e.clientX, y: e.clientY })}
+          onFolderMenu={(list, e) => setMenu({ kind: 'marks', marks: list, x: e.clientX, y: e.clientY })}
+        />
+      )}
+
       <div className="bw-bar" onPointerEnter={precapture}>
         <button type="button" className="bw-btn" title="Back (Alt+Left)" disabled={!current?.canBack} onClick={() => onNative('browser_back')}>
           <ArrowLeft size={16} />
@@ -978,6 +1055,18 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
               {zoomLabel(current.zoom)}
             </button>
           )}
+          <button
+            type="button"
+            data-bw-anchor="star"
+            className={current?.url && bookmarkFor(bookmarks, current.url) ? 'bw-btn bw-star on' : 'bw-btn bw-star'}
+            title="Bookmark this page (Ctrl+D)"
+            aria-label={current?.url && bookmarkFor(bookmarks, current.url) ? 'Edit this page bookmark' : 'Bookmark this page'}
+            aria-pressed={Boolean(current?.url && bookmarkFor(bookmarks, current.url))}
+            disabled={!current?.url}
+            onClick={star}
+          >
+            <Star size={15} weight={current?.url && bookmarkFor(bookmarks, current.url) ? 'fill' : 'regular'} />
+          </button>
         </form>
         <button
           type="button"
@@ -1145,6 +1234,14 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
         )}
       </div>
 
+      {editor && (
+        <BrowserBookmarkEditor
+          mark={editor.mark}
+          fresh={editor.fresh}
+          onDone={finishEditing}
+          onRemove={removeEdited}
+        />
+      )}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems()} onClose={() => setMenu(null)} />}
     </div>
   )

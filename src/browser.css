@@ -544,3 +544,95 @@ html[data-reduce-motion] .bw-btn {
   line-height: 14px;
   text-align: center;
 }
+
+/* ---- bookmarks ---- */
+/* The star sits in the address form, after the field: it is about this page,
+   so it lives where the page's address does. Filled when the page is kept. */
+.bw-star.on {
+  color: var(--accent);
+}
+/* The bar is Chrome's: the bar folder's chips, then Other bookmarks. It only
+   exists while something is kept, so it never holds an empty row. */
+.bw-marks {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  min-height: 30px;
+  border-bottom: 1px solid var(--line);
+}
+.bw-marks-list {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+.bw-mark {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: default;
+  white-space: nowrap;
+}
+.bw-mark:hover {
+  background: var(--bg-hover);
+}
+.bw-mark-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bw-marks-empty {
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.bw-marks-more {
+  flex: none;
+}
+/* The editor's own two rows; the dialog family supplies the frame. */
+.bw-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.bw-field-input {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-app);
+  color: var(--text-1);
+  font: inherit;
+}
+.bw-field-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.bw-seg {
+  display: flex;
+  gap: 4px;
+}
+.bw-seg button {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+}
+.bw-seg button.on {
+  border-color: var(--accent);
+  color: var(--text-1);
+}

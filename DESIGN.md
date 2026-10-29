@@ -293,6 +293,15 @@ spacing.
   work in strip order, so a window resize never changes what a command does.
   The command palette lists the open tabs in its Browser group, and reopens a
   closed one from a row.
+  Bookmarks are the browser's own and stay on this computer: the star beside the
+  address bar (or `Ctrl+D`) keeps the page on the bookmarks bar and opens a small
+  editor for its name and folder, the same press on a kept page edits that
+  bookmark instead of making a second one, and an address is always one row.
+  A bookmark with no name is drawn as its address. The bar sits under the tab
+  strip, draws the bar folder first and the rest behind one overflow control,
+  holds Other bookmarks at its end, and appears only while something is kept;
+  Remove is the editor's own second press and the safe answer (Done) is the
+  primary. No bookmark is sent anywhere, and none of them needs an account.
 - **Text fields:** right-clicking a field opens the console's own menu - Cut,
   Copy, Paste, Select all - because the engine's default menu is off for the
   whole app. A field never has two menus, and the words on the one it has are
