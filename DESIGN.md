@@ -309,6 +309,14 @@ spacing.
   same address twice in a row is one entry. A row opens its address in the tab,
   and Clear history asks once before it empties the list; the pane's own menu
   opens the list. Five hundred entries per window, on this computer only.
+  The address bar suggests as a prefix is typed, from the two lists this device
+  kept and read: an exact prefix on a title ranks above the same letters inside
+  one, a kept address above a plain history hit of the same quality, and among
+  equals the most recent visit wins; one address is one row, six rows at most.
+  Up and Down move the highlight while the field keeps the focus (the list is a
+  listbox the field points at, so nothing is trapped), Enter opens the
+  highlighted row, a modifier or the last row opens a new tab, and Escape closes
+  the list and restores the page's own address.
 - **Text fields:** right-clicking a field opens the console's own menu - Cut,
   Copy, Paste, Select all - because the engine's default menu is off for the
   whole app. A field never has two menus, and the words on the one it has are

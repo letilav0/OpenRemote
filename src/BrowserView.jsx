@@ -35,7 +35,7 @@ import {
 import { hasTauri, isMobile } from './platform.js'
 import { PICKER_CANCEL, PICKER_SOURCE, formatPicked } from './browser-pick.js'
 import { insertToComposer } from './composer-insert.js'
-import { omnibox, security, shownAddress } from './browser-omnibox.js'
+import { omnibox, security, shownAddress, suggest } from './browser-omnibox.js'
 import { closeOthers, closeTab, closeToRight, cycle, canUse, extrasMissing, newTab, openBelongs, rememberClosed, stripPlan, takeClosed, tabTitle } from './browser-tabs.js'
 import { adopt, call, clearHistory, getState, onKey, patchTab, recordVisit, registerReopen, removeBookmark, saveBookmark, setState, subscribe, updateBookmark } from './browser-store.js'
 import { FLOATING, covered } from './browser-occlusion.js'
@@ -45,6 +45,7 @@ import { bookmarkFor, labelFor } from './browser-bookmarks.js'
 import BrowserBookmarksBar from './BrowserBookmarksBar.jsx'
 import BrowserBookmarkEditor from './BrowserBookmarkEditor.jsx'
 import BrowserHistoryModal from './BrowserHistoryModal.jsx'
+import BrowserSuggestions from './BrowserSuggestions.jsx'
 import './browser.css'
 
 // The app's own global keys pressed while a page had focus: handed to the
@@ -110,6 +111,13 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
   const findRef = useRef(null)
   const [address, setAddress] = useState('')
   const [editing, setEditing] = useState(false)
+  const [suggestion, setSuggestion] = useState(-1)
+  // Rows only while the field is being typed in, never on a field showing the
+  // page's own address: the list is for where the person is going.
+  const typedLine = editing && address && address !== shownAddress(current?.url) ? address : ''
+  const suggestionRows = typedLine
+    ? [...suggest({ typed: typedLine, marks: bookmarks, visits: history }), { url: typedLine, title: 'Open in a new tab', newTab: true }]
+    : []
   // The page's picture while a console menu covers it: one element that
   // stays in the page, so a picture is decoded in it before it shows.
   const pictureRef = useRef(null)
@@ -432,6 +440,14 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
   }
 
   // ---- bookmarks ----
+
+  // A suggestion row: the address it names, here or in a new tab.
+  const pick = (row, { newTab: inNewTab = false } = {}) => {
+    if (!row?.url) return
+    setSuggestion(-1)
+    setEditing(false)
+    openUrl(omnibox(row.url), { newTab: inNewTab || row.newTab })
+  }
 
   // A bookmark's address, here or in a new tab (the bar's middle click and
   // Ctrl+click come through the second form).
@@ -1047,8 +1063,15 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
             value={address}
             placeholder="Search Google or type a URL"
             spellCheck={false}
+            role="combobox"
+            aria-label="Address"
+            aria-autocomplete="list"
+            aria-expanded={suggestionRows.length > 0}
+            aria-controls="bw-suggest"
+            aria-activedescendant={suggestion >= 0 ? `bw-suggest-${suggestion}` : undefined}
             onChange={(e) => {
               setEditing(true)
+              setSuggestion(-1)
               setAddress(e.target.value)
             }}
             onFocus={(e) => {
@@ -1058,9 +1081,25 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
             onBlur={() => setEditing(false)}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
+                setSuggestion(-1)
                 setEditing(false)
                 setAddress(shownAddress(current?.url))
                 e.currentTarget.blur()
+                return
+              }
+              // The list is driven from the field, which keeps the focus: the
+              // arrows move the highlight and Enter opens it, so a person who
+              // never touches the mouse can still use the suggestions.
+              if (!suggestionRows.length) return
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setSuggestion((i) => (i + 1) % suggestionRows.length)
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setSuggestion((i) => (i <= 0 ? suggestionRows.length - 1 : i - 1))
+              } else if (e.key === 'Enter' && suggestion >= 0) {
+                e.preventDefault()
+                pick(suggestionRows[suggestion], { newTab: e.ctrlKey || e.metaKey })
               }
             }}
           />
@@ -1082,6 +1121,7 @@ export default function BrowserView({ onClosePane = null, askToShow = null }) {
             <Star size={15} weight={current?.url && bookmarkFor(bookmarks, current.url) ? 'fill' : 'regular'} />
           </button>
         </form>
+        <BrowserSuggestions id="bw-suggest" rows={suggestionRows} active={suggestion} onPick={pick} />
         <button
           type="button"
           className={`bw-btn${device ? ' on' : ''}`}

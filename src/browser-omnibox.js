@@ -46,3 +46,57 @@ export function security(url) {
   if (url.startsWith('http://')) return 'insecure'
   return 'none'
 }
+
+// ---- what the address bar suggests while a prefix is typed ----
+//
+// The two things this device kept and read: bookmarks and history. A row is a
+// candidate address with the title to draw, whether it is kept, and the score
+// it earned. Pure, so the ranking is pinned without a DOM: an exact prefix on
+// a title beats the same letters inside a title, anything kept beats a plain
+// history hit of the same quality, and among equals the most recent visit
+// wins. One address is one row (the kept one, if both know it), and the list
+// is short on purpose: the field is for going somewhere, not for browsing.
+export const SUGGEST_LIMIT = 6
+
+function bareUrl(url) {
+  return String(url ?? '').replace(/^https?:\/\//i, '').toLowerCase()
+}
+
+function quality(entry, needle) {
+  const title = String(entry?.title ?? '').toLowerCase()
+  const bare = bareUrl(entry?.url)
+  if (title.startsWith(needle)) return 0
+  if (bare.startsWith(needle)) return 1
+  if (title.includes(needle)) return 2
+  if (bare.includes(needle)) return 3
+  return null
+}
+
+export function suggest({ typed = '', marks = [], visits = [], limit = SUGGEST_LIMIT } = {}) {
+  const needle = String(typed ?? '').trim().toLowerCase()
+  if (!needle) return []
+  const seen = new Map()
+  const add = (entry, kept) => {
+    const score = quality(entry, needle)
+    if (score == null) return
+    const found = seen.get(entry.url)
+    // A kept address outranks a plain visit of the same quality, but a better
+    // match elsewhere in the list still wins: the flag only breaks ties.
+    if (found && (found.kept || !kept) && found.score <= score) {
+      if (kept) found.kept = true
+      return
+    }
+    seen.set(entry.url, {
+      url: entry.url,
+      title: kept ? String(entry.title ?? '') : String(entry.title ?? ''),
+      kept: kept || Boolean(found?.kept),
+      score,
+      at: Number(entry.at ?? entry.visitedAt ?? 0) || 0,
+    })
+  }
+  for (const mark of marks ?? []) if (mark?.url) add(mark, true)
+  for (const visit of visits ?? []) if (visit?.url) add(visit, false)
+  return [...seen.values()]
+    .sort((a, b) => a.score - b.score || (a.kept ? 0 : 1) - (b.kept ? 0 : 1) || b.at - a.at || a.url.localeCompare(b.url))
+    .slice(0, Math.max(0, limit))
+}
