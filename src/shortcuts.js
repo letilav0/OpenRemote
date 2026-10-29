@@ -58,6 +58,8 @@ export const ACTIONS = [
   { id: 'toggle-fast', group: 'pickers', label: 'Fast on or off', keys: 'Mod+Shift+F' },
   ...modelSwitches,
   { id: 'toggle-sidebar', group: 'layout', label: 'Show or hide the sidebar', keys: 'Mod+B' },
+  // The browser's pane: beside the chat, the pages an agent can drive.
+  { id: 'toggle-browser', group: 'layout', label: 'Show or hide the browser', keys: 'Mod+Shift+B' },
   { id: 'toggle-mode', group: 'layout', label: 'Switch Local and Cloud', keys: 'Mod+Shift+M', navigates: true },
   { id: 'split-right', group: 'layout', label: 'Split right', keys: 'Mod+\\' },
   { id: 'split-down', group: 'layout', label: 'Split down', keys: 'Mod+Shift+\\' },

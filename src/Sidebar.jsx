@@ -19,6 +19,7 @@ import {
   House,
   Lightning,
   MagnifyingGlass,
+  Globe,
   PencilSimple,
   Plus,
   PuzzlePiece,
@@ -99,6 +100,10 @@ export default function Sidebar({
   onAddProject,
   onNewChatIn,
   onReveal,
+  // The browser's pane: the tile in this column asks for it, and the shell owns
+  // whether it is open (the pane sits beside the chat, not inside it).
+  onBrowser = null,
+  browserOpen = false,
   // The shell hosts the rename dialog above both surfaces that offer it, so
   // the row menu only asks for it. `renamedTitles` is the one-beat overlay of
   // names just saved, until the console's own record carries them.
@@ -790,6 +795,24 @@ export default function Sidebar({
               <PuzzlePiece size={17} />
               Plugins
             </button>
+            {/* The browser had one entry point, a globe among the floating icons, and a
+                person looking for it found nothing. It is a tile now, beside the two views
+                it works with, and the tile says whether the pane is open. */}
+            {onBrowser && (
+              <button
+                className={`side-tile${browserOpen ? ' on' : ''}`}
+                onClick={onBrowser}
+                aria-pressed={Boolean(browserOpen)}
+                title={
+                  browserOpen
+                    ? 'Close the browser pane'
+                    : 'Open a browser beside the chat - its pages are the ones an agent can drive'
+                }
+              >
+                <Globe size={17} weight="light" />
+                Browser
+              </button>
+            )}
             <button
               className={`side-tile${active === 'automations' ? ' on' : ''}`}
               onClick={() => onSelect('automations')}

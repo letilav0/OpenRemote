@@ -783,6 +783,7 @@ function Shell() {
     desk,
   )
   useShortcut('toggle-sidebar', () => setSidebarOpen((v) => !v), desk)
+  useShortcut('toggle-browser', toggleBrowser, desk)
   useShortcut('toggle-mode', () => switchMode(mode === 'local' ? 'cloud' : 'local'), desk)
   useShortcut('split-right', () => setLayout((l) => splitLeaf(l, l.focus, 'row')), desk)
   useShortcut('split-down', () => setLayout((l) => splitLeaf(l, l.focus, 'col')), desk)
@@ -1005,6 +1006,8 @@ function Shell() {
       onAddProject={addProject}
       onNewChatIn={newChatIn}
       onReveal={() => setSidebarOpen(true)}
+      onBrowser={toggleBrowser}
+      browserOpen={browserOpen}
       // The row menu's Rename opens the dialog hosted below; the overlay is
       // the name it shows until the console's own record catches up.
       onRenameChat={openRename}
