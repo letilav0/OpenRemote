@@ -47,7 +47,10 @@ export default function PickerMenu({
   const filtered = (() => {
     const q = query.trim().toLowerCase()
     if (!q) return items
-    return items.filter((i) => i.name.toLowerCase().includes(q))
+    // A caller's row can carry its label under another field, or none yet
+    // while the list loads: a nameless row is an empty match, never a throw
+    // on the first keystroke.
+    return items.filter((i) => String(i.name ?? '').toLowerCase().includes(q))
   })()
 
   useBack(true, onClose)
