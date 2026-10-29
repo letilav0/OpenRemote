@@ -8,10 +8,20 @@ import { hasTauri, isMobile } from './platform.js'
 import { insertAfter, newTab, popupBelongs } from './browser-tabs.js'
 import { bookmarkFor, inFolder, positionAt, stepPosition, withBookmark, withoutBookmark } from './browser-bookmarks.js'
 import { HISTORY_CAP, recordVisit as pushVisit } from './browser-history.js'
+import { linkAbort, loadConnection } from './api/daemon.js'
 
-// Bookmarks and history stay on this device: they live in this store and in
-// this console's own localStorage, never in the account, because they are a
-// reading record of one person at one keyboard and nothing here is synced.
+// A bookmark call waits this long for the daemon before it is treated as a
+// daemon that did not answer. A write that never settles is the worst case for
+// this screen: the row the person just kept would sit there as if it had been
+// saved, so every call here has a budget and a timeout becomes the stale notice.
+const BROWSER_CALL_TIMEOUT_MS = 8000
+
+// Bookmarks follow the account; history stays on this device. The daemon keeps
+// the bookmark rows on disk, because that is the store the sync note reads, so
+// the console writes through its browser routes and reads back what it says.
+// localStorage remains only as the first paint's cache: when the daemon
+// answers, the daemon wins. History is the reading record of one person at one
+// keyboard and nothing here syncs it.
 const BOOKMARKS_KEY = 'openremote-browser-bookmarks'
 const HISTORY_KEY = 'openremote-browser-history'
 
@@ -30,6 +40,92 @@ function storeBookmarks(marks) {
     localStorage.setItem(BOOKMARKS_KEY, JSON.stringify({ v: 1, marks }))
   } catch {
     // No storage: the list still lives for this window.
+  }
+}
+
+/// A call to the browser's own routes, on the daemon this console is connected
+/// to. Throws the daemon's sentence when it refuses, so the caller can say it.
+async function browserCall(method, path, body = null) {
+  const { url, token } = loadConnection()
+  if (!url || !token) throw new Error('The console is not connected to its daemon yet.')
+  const base = /^https?:\/\//.test(url) ? url : `http://${url}`
+  const abort = linkAbort({ timeoutMs: BROWSER_CALL_TIMEOUT_MS })
+  try {
+    const response = await fetch(`${base.replace(/\/+$/, '')}${path}`, {
+      method,
+      headers: {
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        Authorization: `Bearer ${token}`,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: abort.signal,
+    })
+    const text = await response.text()
+    let answer = null
+    try {
+      answer = text ? JSON.parse(text) : null
+    } catch {
+      answer = null
+    }
+    if (!response.ok) throw new Error(answer?.error ?? `HTTP ${response.status}`)
+    return answer
+  } catch (err) {
+    if (abort.timedOut) throw new Error('The daemon did not answer in time.')
+    throw err
+  } finally {
+    abort.detach()
+  }
+}
+
+function requestId() {
+  return `mark-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+// A change the daemon did not take goes back to the list as it was, and the
+// bar says the list is what it last saw rather than showing a save that never
+// happened.
+function unsaved(fallback) {
+  setState(() => ({ bookmarks: fallback, bookmarksStale: true }))
+  storeBookmarks(fallback)
+}
+
+// The daemon's rows replace the cache. Called on the first subscriber (the
+// browser view mounting) and after a change it made.
+export async function refreshBookmarks() {
+  try {
+    const answer = await browserCall('GET', '/browser/bookmarks')
+    const marks = Array.isArray(answer?.bookmarks) ? answer.bookmarks : []
+    setState(() => ({ bookmarks: marks, bookmarksStale: false }))
+    storeBookmarks(marks)
+    return true
+  } catch {
+    // Keep what the person can see, and say it is the cache.
+    setState(() => ({ bookmarksStale: true }))
+    return false
+  }
+}
+
+async function writeBookmark(mark, fallback) {
+  try {
+    await browserCall('POST', '/browser/bookmarks', { request_id: requestId(), ...mark })
+    const marks = getState().bookmarks
+    setState(() => ({ bookmarksStale: false }))
+    storeBookmarks(marks)
+  } catch {
+    unsaved(fallback)
+  }
+}
+
+async function unwriteBookmark(id, fallback) {
+  try {
+    await browserCall('POST', `/browser/bookmarks/${encodeURIComponent(id)}/remove`, {
+      request_id: requestId(),
+    })
+    const marks = getState().bookmarks
+    setState(() => ({ bookmarksStale: false }))
+    storeBookmarks(marks)
+  } catch {
+    unsaved(fallback)
   }
 }
 
@@ -55,6 +151,7 @@ function newBookmarkId() {
   return `bm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+let started = false
 let state = (() => {
   const first = newTab()
   return {
@@ -65,6 +162,8 @@ let state = (() => {
     finds: {},
     features: null,
     bookmarks: loadBookmarks(),
+    // Whether the list is the daemon's, or only this window's last cache.
+    bookmarksStale: false,
     history: loadHistory(),
   }
 })()
@@ -119,6 +218,12 @@ export function setState(change) {
 
 export function subscribe(fn) {
   listeners.add(fn)
+  // The first surface to read the bookmarks asks the daemon for the rows it
+  // keeps: the cache answered the first paint, this makes it true.
+  if (!started) {
+    started = true
+    void refreshBookmarks()
+  }
   return () => listeners.delete(fn)
 }
 
@@ -147,6 +252,8 @@ export function saveBookmark({ url, title = '', folder = 'bar', id = '' } = {}) 
       })
   setState(() => ({ bookmarks: marks }))
   storeBookmarks(marks)
+  // The daemon keeps the row a note can carry; a refusal puts this list back.
+  void writeBookmark(marks.find((m) => m.url === url), before)
   return marks.find((m) => m.url === url) ?? null
 }
 
@@ -164,12 +271,16 @@ export function updateBookmark(id, change = {}) {
   )
   setState(() => ({ bookmarks: next }))
   storeBookmarks(next)
+  const written = next.find((m) => m.id === id)
+  if (written) void writeBookmark(written, before)
 }
 
 export function removeBookmark(id) {
-  const next = withoutBookmark(getState().bookmarks, id)
+  const before = getState().bookmarks
+  const next = withoutBookmark(before, id)
   setState(() => ({ bookmarks: next }))
   storeBookmarks(next)
+  void unwriteBookmark(id, before)
 }
 
 // One step up or down the bookmark's own folder, stopped at the ends.

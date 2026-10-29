@@ -59,3 +59,109 @@ test('a page that is gone falls back to the first tab', () => {
   assert.equal(restoredActive(tabs, null), 'x')
   assert.equal(restoredActive([], 'tab-1'), undefined)
 })
+
+// ---- bookmarks: the daemon keeps them, the cache only paints first ----
+
+import { inFolder } from './browser-bookmarks.js'
+import { refreshBookmarks, removeBookmark, saveBookmark } from './browser-store.js'
+
+function daemonEnv(fetchImpl) {
+  const storage = fakeStorage()
+  storage.store.set('openremote-daemon-url', 'http://127.0.0.1:1234')
+  storage.store.set('openremote-daemon-token', 'a-token')
+  globalThis.localStorage = storage
+  globalThis.fetch = fetchImpl
+  setState(() => ({ bookmarks: [], bookmarksStale: false }))
+  return storage
+}
+
+function ok(body) {
+  return async () => ({ ok: true, status: 200, text: async () => JSON.stringify(body) })
+}
+
+function refused(error) {
+  return async () => ({ ok: false, status: 409, text: async () => JSON.stringify({ error }) })
+}
+
+async function settle() {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+test('a bookmark write goes through the daemon route, and its answer wins', async () => {
+  const calls = []
+  const storage = daemonEnv(async (url, init) => {
+    calls.push({ url, init })
+    return ok({ bookmark: JSON.parse(init.body).id ? JSON.parse(init.body) : null })()
+  })
+  try {
+    const saved = saveBookmark({ url: 'https://example.com/', title: 'Example' })
+    assert.ok(saved && saved.url === 'https://example.com/')
+    // The row is drawn at once and sent; the route is the browser's own.
+    const sent = calls.find((c) => c.url.endsWith('/browser/bookmarks'))
+    assert.ok(sent, 'the write reaches the daemon')
+    assert.equal(sent.init.method, 'POST')
+    assert.ok(JSON.parse(sent.init.body).request_id, 'a named request, so a retry is one change')
+    await settle()
+    assert.equal(getState().bookmarksStale, false, 'the daemon took it')
+    // The cache holds the same list for the next first paint.
+    assert.ok(storage.store.get('openremote-browser-bookmarks').includes('example.com'))
+  } finally {
+    delete globalThis.localStorage
+    delete globalThis.fetch
+  }
+})
+
+test('a refused write puts the list back and says it is what it last saw', async () => {
+  daemonEnv(ok({ bookmark: null }))
+  globalThis.fetch = refused('the daemon said no')
+  try {
+    saveBookmark({ url: 'https://kept.test/', title: 'Kept' })
+    await settle()
+    const before = getState().bookmarks.length
+    saveBookmark({ url: 'https://lost.test/', title: 'Lost' })
+    await settle()
+    assert.ok(!getState().bookmarks.some((m) => m.url === 'https://lost.test/'), 'the unsaved row is not drawn as saved')
+    assert.equal(getState().bookmarks.length, before)
+    assert.equal(getState().bookmarksStale, true, 'the bar can say the list is the cache')
+  } finally {
+    delete globalThis.localStorage
+    delete globalThis.fetch
+  }
+})
+
+test('the daemon rows win over the cache on the first read', async () => {
+  daemonEnv(ok({ bookmarks: [{ id: 'daemon-1', url: 'https://from-daemon.test/', title: 'From A', folder: 'bar', position: 1 }] }))
+  try {
+    setState(() => ({ bookmarks: [{ id: 'cache-1', url: 'https://from-cache.test/', title: 'Cache', folder: 'bar', position: 1 }] }))
+    assert.equal(await refreshBookmarks(), true)
+    assert.deepEqual(getState().bookmarks.map((m) => m.url), ['https://from-daemon.test/'])
+    assert.equal(getState().bookmarksStale, false)
+  } finally {
+    delete globalThis.localStorage
+    delete globalThis.fetch
+  }
+})
+
+test('a new bookmark joins its folder, and a delete removes exactly that row', async () => {
+  const storage = daemonEnv(ok({ bookmark: null }))
+  try {
+    const one = saveBookmark({ url: 'https://one.test/', title: 'One' })
+    const two = saveBookmark({ url: 'https://two.test/', title: 'Two' })
+    const bar = inFolder(getState().bookmarks, 'bar')
+    assert.ok(bar.some((m) => m.id === one.id) && bar.some((m) => m.id === two.id), 'both are in the bar')
+    // The order the bar draws is the order the store rule gives the same list.
+    assert.deepEqual(
+      bar.map((m) => m.id),
+      inFolder(bar, 'bar').map((m) => m.id),
+      'the store rule is the one the bar uses',
+    )
+    removeBookmark(one.id)
+    assert.ok(!getState().bookmarks.some((m) => m.id === one.id), 'the deleted row is gone')
+    assert.ok(getState().bookmarks.some((m) => m.id === two.id), 'the other row stays')
+    assert.ok(storage.store.get('openremote-browser-bookmarks').includes('two.test'))
+  } finally {
+    delete globalThis.localStorage
+    delete globalThis.fetch
+  }
+})
