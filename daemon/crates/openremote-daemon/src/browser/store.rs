@@ -223,6 +223,55 @@ impl BrowserStore {
             .map(|((_, k), (_, v))| (k.as_str(), v))
     }
 
+    /// Every row of a collection with the stamp that made it, deletions
+    /// included: this is what a note to another device carries (see
+    /// [`super::sync`]), so a key removed here stays removed there instead of
+    /// being reinvented from the peer's older copy.
+    pub fn rows(&self, col: &str) -> Vec<(String, Stamp, Value)> {
+        let mut rows: Vec<(String, Stamp, Value)> = self
+            .state
+            .iter()
+            .filter(|((c, _), _)| c == col)
+            .map(|((_, k), (at, v))| (k.clone(), at.clone(), v.clone()))
+            .collect();
+        // Ordered by key: a snapshot that goes over the wire the same way
+        // twice is the same bytes, which makes a note easy to compare.
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows
+    }
+
+    /// Takes one row from another device if it is newer than the local one,
+    /// and keeps it in that device's log so it survives this process.
+    ///
+    /// The row is written where [`Self::load`] already looks for it, under the
+    /// device that stamped it, never into this device's own log: compaction
+    /// rewrites only its own file, and a foreign stamp in there would be
+    /// dropped on the next rewrite. Equal stamps mean the same write, so the
+    /// local copy stays and nothing is appended.
+    pub fn merge_row(&mut self, col: &str, key: &str, at: &Stamp, val: &Value) -> bool {
+        if self
+            .state
+            .get(&(col.to_string(), key.to_string()))
+            .is_some_and(|(local, _)| local >= at)
+        {
+            return false;
+        }
+        let op = Op {
+            at: at.clone(),
+            col: col.into(),
+            key: key.into(),
+            val: val.clone(),
+        };
+        let line = serde_json::to_string(&op).expect("an op serializes");
+        let device = at.dev.clone();
+        let path = self.log_path(&device);
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = writeln!(file, "{line}");
+        }
+        self.apply(op);
+        true
+    }
+
     /// Rewrites this device's log with only what is still true, and drops
     /// history past its keeping time.
     fn compact(&mut self) {

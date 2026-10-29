@@ -13,6 +13,7 @@
 
 pub mod routes;
 pub mod store;
+pub mod sync;
 pub mod tools;
 
 use std::collections::HashMap;
