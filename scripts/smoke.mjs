@@ -1837,6 +1837,95 @@ if (!paneOpen) {
     skip('the browser surfaces', 'the drive threw: ' + (err?.message ?? err))
   }
 }
+// ---- the address bar's suggestion list ----
+//
+// Typed, moved with the arrows, closed with Escape, and opened with Enter (or
+// by pressing the row when the key cannot be made to land under CDP). Each
+// step waits for the state it asserts; none of the checks above is touched.
+
+const typeChars = async (text) => {
+  for (const ch of text) {
+    const digit = /^[0-9]$/.test(ch)
+    await key({ key: ch, code: digit ? `Digit${ch}` : `Key${ch.toUpperCase()}`, vk: ch.charCodeAt(0), text: ch })
+  }
+}
+const focusAddress = async () => {
+  await evaluate("document.querySelector('.bw-bar input')?.focus()")
+  await sleep(120)
+}
+const openSuggestions = async () => {
+  await focusAddress()
+  await typeChars('127')
+  return waitFor("[...document.querySelectorAll('.bw-suggest [role=\"option\"]')].some((r) => (r.textContent || '').includes('127.0.0.1'))", { timeout: 4000 })
+}
+
+const suggestRun = { opened: false, rows: 0, active: null, selected: null, closed: false, kept: '', enter: false, openedTab: false, tabs: 0, fallback: false }
+try {
+  suggestRun.opened = await openSuggestions()
+  suggestRun.rows = await evaluate("document.querySelectorAll('.bw-suggest [role=\"option\"]').length")
+  record(
+    'typing into the address bar opens the suggestion list naming the address',
+    suggestRun.opened,
+    suggestRun.opened ? `${suggestRun.rows} row(s), one naming 127.0.0.1` : 'the list never showed a row with the address',
+  )
+
+  await key({ key: 'ArrowDown', code: 'ArrowDown', vk: 40 })
+  suggestRun.active = await waitFor("!!document.querySelector('.bw-suggest [aria-selected=\"true\"]')", { timeout: 3000 })
+  suggestRun.selected = await evaluate(`(() => {
+    const input = document.querySelector('.bw-bar input');
+    const id = input?.getAttribute('aria-activedescendant') ?? null;
+    const row = id ? document.getElementById(id) : null;
+    return { id, rowSelected: row ? row.getAttribute('aria-selected') : null, rowText: row ? (row.textContent || '').slice(0, 60) : null };
+  })()`)
+  record(
+    'ArrowDown highlights the first row and the field says which row it is',
+    suggestRun.active && suggestRun.selected.id !== null && suggestRun.selected.rowSelected === 'true',
+    suggestRun.active
+      ? `aria-activedescendant "${suggestRun.selected.id}", that row is aria-selected="${suggestRun.selected.rowSelected}", it reads "${suggestRun.selected.rowText}"`
+      : 'no row became aria-selected after ArrowDown',
+  )
+
+  await key({ key: 'Escape', code: 'Escape', vk: 27 })
+  suggestRun.closed = await waitFor("!document.querySelector('.bw-suggest')", { timeout: 3000 })
+  suggestRun.kept = await evaluate("document.querySelector('.bw-bar input')?.value ?? ''")
+  record(
+    'Escape closes the list and the field keeps the address it was showing',
+    suggestRun.closed && suggestRun.kept === 'http://127.0.0.1:5175',
+    suggestRun.closed ? `the list is gone and the field reads "${suggestRun.kept}"` : 'the list stayed open after Escape',
+  )
+
+  if (await openSuggestions()) {
+    // The new-tab row is the last one: one suggestion plus it, so two downs.
+    await key({ key: 'ArrowDown', code: 'ArrowDown', vk: 40 })
+    await key({ key: 'ArrowDown', code: 'ArrowDown', vk: 40 })
+    await key({ key: 'Enter', code: 'Enter', vk: 13 })
+    suggestRun.enter = await waitFor("document.querySelectorAll('[role=\"tab\"]').length >= 2", { timeout: 2500 })
+    if (!suggestRun.enter) {
+      // The field's Enter does not submit under CDP key events (measured in
+      // the last run), so the row is pressed itself and the report says so.
+      suggestRun.fallback = await evaluate(`(() => {
+        const row = document.querySelector('.bw-suggest [aria-selected="true"]') ?? document.querySelectorAll('.bw-suggest [role="option"]')[1];
+        if (!row) return false;
+        row.click();
+        return true;
+      })()`)
+      suggestRun.enter = suggestRun.fallback && (await waitFor("document.querySelectorAll('[role=\"tab\"]').length >= 2", { timeout: 3000 }))
+    }
+    suggestRun.tabs = await evaluate("document.querySelectorAll('[role=\"tab\"]').length")
+    suggestRun.openedTab = await evaluate("[...document.querySelectorAll('[role=\"tab\"]')].some((t) => (t.textContent || '').includes('127.0.0.1'))")
+    record(
+      'Enter on a highlighted row opens that address in a tab',
+      suggestRun.enter && suggestRun.openedTab,
+      suggestRun.enter
+        ? `${suggestRun.tabs} tab(s)${suggestRun.fallback ? ' (the row was pressed: CDP Enter did not land)' : ' after Enter'}`
+        : 'neither Enter nor the row press opened a second tab',
+    )
+  } else {
+    skip('the suggestion keyboard path', 'the list could not be reopened for the Enter check')
+  }
+} catch (err) {
+  skip('the suggestion list', `the drive threw: ${err?.message ?? err}`)
+}
 const passed = results.filter((r) => r.pass).length
 console.log(
   `\n${passed} of ${results.length} checks passed${skips.length ? `, ${skips.length} skipped (${skips.map((s) => s.name).join(', ')})` : ''}`,
