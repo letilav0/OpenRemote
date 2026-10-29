@@ -46,6 +46,13 @@ const PULL_RETRY_DELAY: Duration = Duration::from_secs(5);
 /// offered again here, without waiting for a restart.
 const RETRY_EVERY: Duration = Duration::from_secs(300);
 
+/// How often the browser watcher compares its fingerprint of the synced rows,
+/// and the floor between two snapshots it sends. One second notices a change
+/// without a write per keystroke; two seconds between sends makes a burst of
+/// edits one note, and the merge on the far side makes a repeat harmless.
+const BROWSER_TICK: Duration = Duration::from_secs(1);
+const BROWSER_EVERY: Duration = Duration::from_secs(2);
+
 #[derive(Default)]
 pub struct SyncState {
     /// Who has each chat this device runs open: they get its events live.
@@ -57,6 +64,10 @@ pub struct SyncState {
     /// When each chat's last head notice went out, and whether a trailing
     /// one is already scheduled.
     heads: Mutex<HashMap<SessionId, (Instant, bool)>>,
+    /// What arrived in the browser notes so far: the last sequence merged from
+    /// each peer, so a repeated snapshot is skipped before its rows are walked.
+    /// The merge itself is idempotent by stamp; this only saves the walk.
+    browser: Mutex<crate::browser::sync::Received>,
 }
 
 /// A chat's slot in the pulling set, held for exactly as long as its pull
@@ -396,10 +407,28 @@ pub async fn sync_with(app: &Arc<App>, peer: DeviceId) {
     for (_, id, runner) in wanted {
         pull(app, peer, id, runner).await;
     }
+    // The browser's settings and bookmarks ride the same link, one snapshot
+    // each way: the peer merges only rows newer than its own, so a peer that
+    // was away adopts what changed here and a peer that already holds it
+    // changes nothing.
+    send_browser(app, &mesh, peer).await;
 }
 
 /// One-way messages from peers.
 pub fn on_note(app: &Arc<App>, peer: PeerContext, note: Value) {
+    // The browser's settings and bookmarks travel as their own note, naming no
+    // session: it is read before the session parse below, which is where every
+    // chat note proves what it is about. Any device of the account may send
+    // this one and every device takes it - docs/cloud-trust-model.md has the
+    // row, beside the tombstone a device can also send - and the merge is per
+    // key by stamp, so a repeat or a stale snapshot changes nothing.
+    if crate::browser::sync::is_browser_note(&note) {
+        let from = peer.device_id.to_string();
+        let mut store = lock_recovering(&app.browser.store);
+        let mut received = lock_recovering(&app.sync.browser);
+        received.merge(&mut store, &from, &note);
+        return;
+    }
     let Some(id) = note["session"].as_str().and_then(SessionId::parse) else {
         return;
     };
@@ -508,6 +537,50 @@ pub async fn announce_tombstone(app: &Arc<App>, id: SessionId, stone: Tombstone)
     }
 }
 
+/// This device's browser snapshot, ready to send: the settings and the
+/// bookmark tree with the stamp that made each row, deletions included. A
+/// snapshot rather than a delta, so a peer that missed a note - a link that
+/// dropped, a device that was off - catches up from the next one, and a
+/// repeat is a no-op because the merge takes only rows newer than its own.
+fn browser_note(app: &App) -> Value {
+    let mut store = lock_recovering(&app.browser.store);
+    let seq = crate::browser::sync::next_seq(&mut store);
+    crate::browser::sync::note(&store, seq)
+}
+
+/// A cheap summary of the synced rows, so the watcher can tell one tick from
+/// another. Only the two collections a note carries count: the sequence
+/// counter sits in its own, so sending a note does not look like a change and
+/// cannot make the watcher send again.
+fn browser_fingerprint(app: &App) -> u64 {
+    let store = lock_recovering(&app.browser.store);
+    let mut hash: u64 = 0;
+    for col in ["setting", "bookmark"] {
+        for (key, at, _) in store.rows(col) {
+            hash = hash.wrapping_mul(1099511628211).wrapping_add(at.ms as u64);
+            hash = hash
+                .wrapping_mul(1099511628211)
+                .wrapping_add(u64::from(at.n));
+            hash = hash
+                .wrapping_mul(1099511628211)
+                .wrapping_add(at.dev.len() as u64);
+            for byte in key.bytes() {
+                hash = hash
+                    .wrapping_mul(1099511628211)
+                    .wrapping_add(u64::from(byte));
+            }
+        }
+    }
+    hash
+}
+
+/// Sends the browser snapshot to one peer. The peer merges it per key, so this
+/// is safe to repeat, and callers do not track whether one arrived.
+async fn send_browser(app: &Arc<App>, mesh: &Mesh, peer: DeviceId) {
+    let note = browser_note(app);
+    let _ = mesh.note(peer, &note).await;
+}
+
 /// The chats a lag must reconcile: every entry in the watcher map. An
 /// entry can hold an empty set by now (its last watcher left), but the
 /// chat's copies still missed their head notices, so the entry still
@@ -529,8 +602,44 @@ fn head_skips(watchers: &[DeviceId], failed: &[DeviceId]) -> Vec<DeviceId> {
 
 /// The runner's side: every event of a synced chat it runs goes live to the
 /// chat's watchers, and its new head to everyone else, at most once a
-/// second (a trailing notice makes sure the last one goes out).
+/// second (a trailing notice makes sure the last one goes out). It also
+/// carries the browser snapshot, whose store has no event stream of its own.
 pub fn start_pusher(app: &Arc<App>) {
+    // The browser's settings and bookmarks are written from the console's
+    // routes and from the browser's own calls, neither of which is a channel
+    // this module can subscribe to. A fingerprint of the synced rows compared
+    // once a second notices a change; the send is debounced, so a burst of
+    // edits is one note. Same shape as the chat announcements: the peers
+    // online now hear it, the rest learn it from the next summary, and a
+    // device a version behind ignores the type.
+    let watcher = Arc::downgrade(app);
+    tokio::spawn(async move {
+        let mut sent: Option<u64> = None;
+        let mut at = Instant::now();
+        loop {
+            tokio::time::sleep(BROWSER_TICK).await;
+            let Some(app) = watcher.upgrade() else {
+                return;
+            };
+            let now = browser_fingerprint(&app);
+            if sent == Some(now) || at.elapsed() < BROWSER_EVERY {
+                continue;
+            }
+            let Some(mesh) = app.cloud.mesh() else {
+                continue;
+            };
+            let peers = mesh.online();
+            if peers.is_empty() {
+                continue;
+            }
+            let note = browser_note(&app);
+            for peer in peers {
+                let _ = mesh.note(peer, &note).await;
+            }
+            sent = Some(now);
+            at = Instant::now();
+        }
+    });
     let mut events = app.supervisor.subscribe();
     let weak = Arc::downgrade(app);
     tokio::spawn(async move {
