@@ -40,7 +40,7 @@ the project's own map.
   `npm run tauri:dev` running in another terminal), plus `check-tab-acl.mjs`,
   the capability-scope guard CI runs. Run bare it prints
   `tab acl ok: 2 capability file(s), every non-phone one scoped to the main
-  webview, every declared command (27) granted` and exits 0, or exits 1 and
+  webview, every declared command (33) granted` and exits 0, or exits 1 and
   names the capability that widened; `--self-test` checks the check itself,
   and `--root` points it at another tree. Not build tooling; the one build
   script is `sync-daemon.mjs`.
@@ -91,30 +91,19 @@ openremote-daemon unenroll     # leave Cloud (keeps private chats)
 cd daemon
 cargo test --locked            # unit + e2e
 cargo clippy --all-targets --locked -- -D warnings
-cargo fmt --all --check        # CI runs this and the lint; the lint is red here
+cargo fmt --all --check        # CI runs this and the lint
 ```
 
-Both gates are red on the committed tree, and neither failure is in the
-shell. `cargo fmt --all --check` reports eight files across four crates
-(`openremote-core/src/model.rs`, `openremote-core/src/store.rs`,
-`openremote-daemon/src/app.rs`, `openremote-daemon/src/http.rs`,
-`openremote-daemon/src/registry.rs`, `openremote-grok/src/config.rs`,
-`openremote-opencode/src/driver.rs`, `openremote-opencode/src/resolve.rs`),
-counted as the distinct paths among its `Diff in` lines. Those are exactly
-the files carrying uncommitted work, so a working tree can pass this check
-while the commit does not: check it on a clean checkout before believing a
-green run. `cargo clippy --all-targets --locked -- -D warnings` stops on
-three lints (`openremote-daemon/src/http.rs:376`, unneeded cloning of
-iterator items; `openremote-daemon/src/http.rs:624`, unneeded late
-initialization; `openremote-daemon/src/supervisor.rs:1215`, a function with
-9 arguments where 7 is the limit), printed as five `error:` lines: those
-three and the two `could not compile` lines after them.
+Both gates are green on the committed tree, and CI runs them on every push:
+the `daemon` jobs on Windows, macOS and Linux, the MSRV job at 1.85, the
+console's suite on all three, and the shell's own clippy and build. They were
+not always green: eight daemon files carried uncommitted work for a day, and
+the repair landed with the browser merge. A `Diff in` line naming a file you
+have not touched is someone else's in-flight edit in a shared working tree, not
+a broken commit: check the committed tree before believing it.
+
 `cargo fmt --check` inside `src-tauri` alone is green, because the shell's
 own files are formatted.
-
-The repair is one `cargo fmt` across the daemon workspace and three lint
-fixes, once the work in those files has landed. Reformatting them first
-would rewrite someone's in-flight edits, which is why it has waited.
 
 ## The sidecar, and its two copies
 
@@ -185,12 +174,15 @@ an old process is still alive; find it before re-running).
 - What a peer can therefore do is more than drive: it can create a chat
   here with an approval-bypassing permission word, change a stopped
   chat's word so the next resume runs with it, answer the approval
-  prompts through `/decisions/{id}/answer`, and delete a synced chat
+  prompts through `/decisions/{id}/answer`, delete a synced chat
   through a `sync.tombstone` note, which is not a route and so sits
-  outside `PEER_ROUTES` (`on_note`, `sync.rs`). The approval gate guards
-  against a harness, not against a device; it is not a promise that a
-  peer cannot answer. `docs/cloud-trust-model.md` is the route-by-route
-  table, with what does protect the user instead.
+  outside `PEER_ROUTES` (`on_note`, `sync.rs`), and rewrite this
+  computer's browser settings and bookmark tree through a `sync.browser`
+  note, deletions included, with no confirm and no record of which device
+  did it. The approval gate guards against a harness, not against a
+  device; it is not a promise that a peer cannot answer.
+  `docs/cloud-trust-model.md` is the route-by-route table, with what does
+  protect the user instead.
 - Secrets (the daemon token, `state.json`, `cloud/`) are owner-only files.
 
 ## Releases
@@ -251,14 +243,13 @@ an old process is still alive; find it before re-running).
 ## Checking this file
 
 Four commands check what this page claims, and a reader can run all of them
-from the repo root: `npm test` (prints a count; 976 the last time this line
+from the repo root: `npm test` (prints a count; 1078 the last time this line
 was checked, and the run is the truth rather than this number), `node
 scripts/check-tab-acl.mjs` (says `tab acl ok: 2 capability file(s), every
-non-phone one scoped to the main webview, every declared command (27)
-granted`), `cd daemon && cargo fmt --all --check` (on a clean checkout,
-lists the eight files named under Commands), and
-`cd daemon && cargo clippy --all-targets --locked -- -D warnings` (lists the
-three lints). The route and tier claims in "Cloud's
+non-phone one scoped to the main webview, every declared command (33)
+granted`), `cd daemon && cargo fmt --all --check` and
+`cd daemon && cargo clippy --all-targets --locked -- -D warnings` (both print
+nothing and exit 0 on the committed tree). The route and tier claims in "Cloud's
 trust model" are counted from `PEER_ROUTES` in
 `daemon/crates/openremote-daemon/src/http.rs`, the peer paths are driven in
 `daemon/crates/openremote-daemon/tests/e2e_cloud_mesh.rs`, and

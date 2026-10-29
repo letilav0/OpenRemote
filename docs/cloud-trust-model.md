@@ -92,7 +92,8 @@ paths (the Sync tier reads logs, the note channel appends them; see One-way note
 
 Some of what a peer can do is not a route. The mesh also carries notes, handled by `on_note` in
 `daemon/crates/openremote-daemon/src/sync.rs`, so `PEER_ROUTES` does not gate them and no tier
-applies. Four types reach it, and none of the four can touch a private chat:
+applies. Five types reach it. Four of them are about chats, and none of the four can touch a private
+chat; the fifth carries no chat at all and is the one described after the table.
 
 | note | what it does on this computer | a private chat |
 |---|---|---|
@@ -100,6 +101,7 @@ applies. Four types reach it, and none of the four can touch a private chat:
 | `sync.events` | appends events to a chat's log, attributed to the sender. The store takes them only from the chat's executor and only in sequence, and a gap makes this computer pull the missing range (`store.rs`, `append_replicated`) | refused: a private chat names no executor, so the attribution cannot match |
 | `sync.head` | makes this computer pull from the sender when the sender's head is ahead of its own (`pull`) | nothing happens: it writes nothing itself, and what comes back is checked the same way as an append |
 | `sync.tombstone` | deletes a synced chat: stops it if it is running here, records the tombstone, and stops syncing it (`apply_tombstone`) | returns before it stops, tombstones or forgets anything |
+| `sync.browser` | rewrites this computer's browser settings and bookmark tree: every row newer than the local one is taken, key by key, deletions (a bookmark removed) included. Any device of the account may send it (`browser/sync.rs`, `on_note`) | nothing at all: the note names no session, so it never reaches chat data, and history, cookies, site storage and the tabs to restore are not in it |
 
 The tombstone is a deletion, and it is the one that matters. It is also how a deletion crosses
 devices: the computer where a synced chat was deleted sends one, the copies apply it, and that is why
@@ -121,10 +123,24 @@ computer does not hold is not only an append. The store accepts a copy that open
 `session.created` and names the sender as its runner, so a peer can make a synced chat appear in
 this computer's Cloud list, the same shape the Sync tier's pull already allows.
 
-The private-chat refusal is by construction in each of the four paths, not one shared check. Only
-the tombstone path has a test (`sync.rs`,
+`sync.browser` is the same kind of door as the tombstone, one collection further out. Any device of
+the account may send it, and it writes this computer's browser settings and bookmark tree without
+asking: a peer can set a value, change one the user wrote, add a bookmark or delete one, and the
+result is what the next person at this computer sees. Nothing here records which device changed what,
+and no route undoes it. What it cannot reach is on the other side of the same table: the note names
+no session, so no chat's data takes part, and the four collections that stay device-local (history,
+cookies, site storage, the tabs to restore) are not in the note at all. The merge is per key by
+stamp, so every device converges on the newest write rather than the last one to arrive, and a note
+a version behind cannot be mistaken for a chat one; none of that is a protection against a peer who
+simply means it. Removal is: a device taken off the account stops being a device of the account, and
+its notes stop arriving with its key.
+
+The private-chat refusal is by construction in each of the four chat paths, not one shared check.
+Only the tombstone path has a test (`sync.rs`,
 `a_tombstone_naming_a_private_chat_is_refused_and_its_data_survives`); the other three are read
-from `on_note` and `append_replicated`.
+from `on_note` and `append_replicated`. The browser note goes a different way: it names no session
+to refuse, its merge rules are unit tested (`browser/sync.rs`), and two daemons sharing a setting
+and a bookmark deletion are driven end to end in `tests/e2e_browser_sync.rs`.
 
 ## The uncomfortable part
 
