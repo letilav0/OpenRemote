@@ -74,16 +74,28 @@ pub struct Row {
 
 /// One `sync.browser` note as it travels. `updated_at` is the newest stamp in
 /// the snapshot, or 0 for an empty profile; it orders two snapshots, it never
-/// merges them.
+/// merges them. `start` names the sender's run of this daemon: the sequence
+/// number restarts at one when a device is reset, and this is what tells a
+/// receiver that a low number is a new beginning rather than a stale repeat.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Note {
     pub v: u64,
     pub seq: u64,
     pub updated_at: i64,
     #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default)]
     pub settings: BTreeMap<String, Row>,
     #[serde(default)]
     pub bookmarks: BTreeMap<String, Row>,
+}
+
+/// This run's marker: one per daemon process, so a note from before a reset
+/// (or from an older build, which sends none) can be told from one after it.
+/// A value nobody chose, never a device name.
+pub fn start_marker() -> &'static str {
+    static START: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    START.get_or_init(|| uuid::Uuid::new_v4().simple().to_string())
 }
 
 /// Whether a peer note is one of these, for the engine's dispatch.
@@ -133,6 +145,7 @@ pub fn note(store: &BrowserStore, seq: u64) -> Value {
         v: VERSION,
         seq,
         updated_at,
+        start: Some(start_marker().to_string()),
         settings,
         bookmarks,
     };
@@ -187,18 +200,20 @@ impl Refused {
 /// The receipt side: what arrived from each peer, and what was taken from it.
 #[derive(Default)]
 pub struct Received {
-    /// The last sequence merged from each peer, so a repeated note is skipped
-    /// without walking its rows. Merging is idempotent either way; this only
-    /// saves the walk.
-    seen: HashMap<String, u64>,
+    /// The last sequence merged from each peer, and the run of that daemon it
+    /// belonged to. A repeat is skipped without walking its rows (merging is
+    /// idempotent either way, this only saves the walk), and a *different* run
+    /// means the peer's store was reset and its sequence restarted: the row
+    /// stamps still decide what lands, so the note is read rather than
+    /// silently dropped.
+    seen: HashMap<String, (u64, Option<String>)>,
 }
 
 impl Received {
     /// Takes a peer's snapshot into the store, keeping only rows newer than the
-    /// local ones, and answers how many were taken. A note not newer than the
-    /// last one from the same peer changes nothing and is not an error; a note
-    /// of another type or version, or one over a ceiling below, is refused
-    /// whole (`Refused`) with the store untouched.
+    /// local ones, and answers how many were taken. A repeat changes nothing
+    /// and is not an error; a note of another type or version, or one over a
+    /// ceiling, is refused whole (`Refused`) with the store untouched.
     pub fn merge(
         &mut self,
         store: &mut BrowserStore,
@@ -217,12 +232,27 @@ impl Received {
         if snapshot.v != VERSION {
             return Err(Refused::Version);
         }
-        if self
-            .seen
-            .get(from)
-            .is_some_and(|last| snapshot.seq <= *last)
-        {
-            return Ok(0);
+        let start = snapshot.start.clone();
+        if let Some((last, marker)) = self.seen.get(from) {
+            if marker.as_deref() == start.as_deref() && snapshot.seq <= *last {
+                // A skip is not a refusal, but it is still a decision nobody
+                // sees: the peer's note changed nothing here. Said out loud so
+                // a peer that cannot catch up leaves a trace.
+                eprintln!(
+                    "openremote-daemon: sync.browser: note {} from {from} is not newer than {last} from the same run - skipped",
+                    snapshot.seq
+                );
+                return Ok(0);
+            }
+            if marker.as_deref() != start.as_deref() {
+                // The sequence restarted under a new run marker: the store was
+                // reset. The rows are compared by their stamps, so a stale one
+                // cannot win, and the fresh ones land.
+                eprintln!(
+                    "openremote-daemon: sync.browser: note {} from {from} comes from a new run - read, not skipped",
+                    snapshot.seq
+                );
+            }
         }
         // Every ceiling is checked before anything is written: a refusal must
         // leave the store byte for byte as it found it.
@@ -265,7 +295,8 @@ impl Received {
         if fresh_settings > MAX_NEW_SETTINGS || fresh_bookmarks > MAX_NEW_BOOKMARKS {
             return Err(Refused::NewKeys);
         }
-        self.seen.insert(from.to_string(), snapshot.seq);
+        self.seen
+            .insert(from.to_string(), (snapshot.seq, snapshot.start.clone()));
         let mut applied = 0;
         for (key, row) in &snapshot.settings {
             if usable_device(&row.at.dev) && store.merge_row("setting", key, &row.at, &row.val) {
@@ -340,6 +371,7 @@ mod tests {
             v: VERSION,
             seq,
             updated_at: 1,
+            start: None,
             settings: rows(settings),
             bookmarks: rows(bookmarks),
         };
@@ -622,5 +654,43 @@ mod tests {
             sent["settings"].get("huge").is_none(),
             "a row a peer would refuse the note for does not travel"
         );
+    }
+
+    #[test]
+    fn a_reset_device_is_read_again_rather_than_skipped() {
+        let (_dir, mut store) = fresh();
+        let mut received = Received::default();
+        let mut first = built(5, vec![("search".into(), json!("duckduckgo"))], Vec::new());
+        first["start"] = json!("run-one");
+        assert_eq!(received.merge(&mut store, "device-a", &first), Ok(1));
+        // The same run repeating its last note is skipped, which is intended.
+        assert_eq!(received.merge(&mut store, "device-a", &first), Ok(0));
+        // The peer's store was reset: its sequence starts again under a new
+        // run marker, and the fresh rows must still land.
+        let mut restarted = built(
+            1,
+            vec![("home".into(), json!("https://example.com/"))],
+            Vec::new(),
+        );
+        restarted["start"] = json!("run-two");
+        assert_eq!(received.merge(&mut store, "device-a", &restarted), Ok(1));
+        assert_eq!(store.settings()["home"], "https://example.com/");
+        // A note from a build that sends no marker cannot prove it is a
+        // repeat, so it is read; the row stamps decide what lands.
+        let older = built(1, vec![("zoom".into(), json!(1))], Vec::new());
+        assert_eq!(received.merge(&mut store, "device-a", &older), Ok(1));
+        assert_eq!(store.settings()["zoom"], 1);
+    }
+
+    #[test]
+    fn a_deleted_bookmark_keeps_a_tombstone_the_note_carries() {
+        let (_dir, mut store) = fresh();
+        let saved = store.save_bookmark(mark("https://example.com/", "Example"));
+        store.remove_bookmark(&saved.id);
+        assert!(store.bookmarks().is_empty(), "the list no longer shows it");
+        let sent = note(&store, 1);
+        let row = &sent["bookmarks"][&saved.id];
+        assert!(row.is_object(), "the row is still carried: {}", sent);
+        assert!(row["val"].is_null(), "as the tombstone a merge honours");
     }
 }

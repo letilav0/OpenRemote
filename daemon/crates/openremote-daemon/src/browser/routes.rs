@@ -1,7 +1,9 @@
 //! The browser's routes, for this device's console and the chats' MCP
 //! server only: none of them answers the user's other devices. Writes are
 //! keyed (a bookmark's id, a setting's name) and the latest one wins, so a
-//! retried request lands the same way twice; they need no receipts.
+//! retried request lands the same way twice. The bookmark write and delete
+//! also record a receipt when the caller names a request, because the console
+//! shows the answer and a second press must not read as a second change.
 
 use std::sync::Arc;
 
@@ -10,13 +12,14 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use openremote_core::SessionId;
+use openremote_core::{Receipt, ReceiptStatus, SessionId};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::store::Bookmark;
 use super::{Chat, lock, tools};
 use crate::app::App;
+use crate::http::receipt_response;
 
 pub fn routes() -> Router<Arc<App>> {
     Router::new()
@@ -27,9 +30,9 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/browser/suggest", get(suggest))
         .route("/browser/tiles", get(tiles).post(pin_tile))
         .route("/browser/tiles/remove", post(remove_tile))
-        .route("/browser/bookmarks", post(save_bookmark))
+        .route("/browser/bookmarks", get(bookmarks).post(save_bookmark))
         .route("/browser/bookmarks/{id}/remove", post(remove_bookmark))
-        .route("/browser/settings", post(set_settings))
+        .route("/browser/settings", get(settings).post(set_settings))
         .route("/browser/permissions", post(set_permission))
         .route("/browser/session", post(save_session))
         .route("/browser/tabs/{tab}/control", post(control))
@@ -129,16 +132,93 @@ async fn remove_tile(State(app): State<Arc<App>>, Json(body): Json<TileBody>) ->
     Json(json!({"ok": true})).into_response()
 }
 
-async fn save_bookmark(State(app): State<Arc<App>>, Json(mark): Json<Bookmark>) -> Response {
-    if mark.url.trim().is_empty() {
-        return bad(StatusCode::BAD_REQUEST, "a bookmark needs an address");
-    }
-    Json(lock(&app.browser.store).save_bookmark(mark)).into_response()
+/// The bookmark rows, in the shape a sync note carries: the list the console
+/// draws and the one another device's note merges into.
+async fn bookmarks(State(app): State<Arc<App>>) -> Response {
+    let store = lock(&app.browser.store);
+    Json(json!({"bookmarks": store.bookmarks()})).into_response()
 }
 
-async fn remove_bookmark(State(app): State<Arc<App>>, AxumPath(id): AxumPath<String>) -> Response {
+/// The settings the console changed, as the map it draws. A null value is a
+/// setting put back to its default, which is why it is absent here.
+async fn settings(State(app): State<Arc<App>>) -> Response {
+    let store = lock(&app.browser.store);
+    Json(store.settings()).into_response()
+}
+
+/// One bookmark row to write: the console's fields, and the request it names.
+#[derive(Deserialize)]
+struct SaveBookmarkBody {
+    /// Absent for a caller that does not want the answer remembered (the
+    /// chats' tools); the console always names one.
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(flatten)]
+    mark: Bookmark,
+}
+
+/// Write one bookmark row (add or edit). The write is keyed by the row's id,
+/// so a retried request lands the same way twice; a named request also records
+/// a receipt and answers with it, so the console's second press reads as one
+/// change rather than two.
+async fn save_bookmark(
+    State(app): State<Arc<App>>,
+    Json(body): Json<SaveBookmarkBody>,
+) -> Response {
+    if body.mark.url.trim().is_empty() {
+        return bad(StatusCode::BAD_REQUEST, "a bookmark needs an address");
+    }
+    let Some(request_id) = body.request_id else {
+        return Json(lock(&app.browser.store).save_bookmark(body.mark)).into_response();
+    };
+    if let Some(receipt) = app.supervisor.receipt(&request_id) {
+        return receipt_response(&receipt);
+    }
+    let saved = lock(&app.browser.store).save_bookmark(body.mark);
+    let receipt = Receipt {
+        request_id,
+        session_id: None,
+        status: ReceiptStatus::Completed,
+        result: Some(json!({"bookmark": saved})),
+        error: None,
+        updated_at: openremote_core::now_ms(),
+    };
+    app.supervisor.record_receipt(receipt.clone());
+    receipt_response(&receipt)
+}
+
+/// Delete one bookmark row: the row keeps a tombstone (a null value), which is
+/// what the merge understands, so the deletion travels to the account's other
+/// devices instead of the row quietly reappearing from an older copy.
+async fn remove_bookmark(
+    State(app): State<Arc<App>>,
+    AxumPath(id): AxumPath<String>,
+    body: Option<Json<RequestIdBody>>,
+) -> Response {
+    let named = body.and_then(|Json(body)| body.request_id);
+    let Some(request_id) = named else {
+        lock(&app.browser.store).remove_bookmark(&id);
+        return Json(json!({"ok": true})).into_response();
+    };
+    if let Some(receipt) = app.supervisor.receipt(&request_id) {
+        return receipt_response(&receipt);
+    }
     lock(&app.browser.store).remove_bookmark(&id);
-    Json(json!({"ok": true})).into_response()
+    let receipt = Receipt {
+        request_id,
+        session_id: None,
+        status: ReceiptStatus::Completed,
+        result: Some(json!({"removed": id})),
+        error: None,
+        updated_at: openremote_core::now_ms(),
+    };
+    app.supervisor.record_receipt(receipt.clone());
+    receipt_response(&receipt)
+}
+
+#[derive(Deserialize)]
+struct RequestIdBody {
+    request_id: Option<String>,
 }
 
 /// Settings the console changed: `{name: value}`; a null puts one back to

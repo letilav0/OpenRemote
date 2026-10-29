@@ -3049,7 +3049,7 @@ async fn get_receipt(
     }
 }
 
-fn receipt_response(receipt: &Receipt) -> Response {
+pub(crate) fn receipt_response(receipt: &Receipt) -> Response {
     let status = match receipt.status {
         ReceiptStatus::Accepted => StatusCode::ACCEPTED,
         ReceiptStatus::Completed => StatusCode::OK,

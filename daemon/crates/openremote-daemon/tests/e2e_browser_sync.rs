@@ -14,7 +14,7 @@ use common::{TestDaemon, call, raw_http, start_cloud_daemon};
 use fake_cloud::FakeCloud;
 use openremote_cloud::CloudConfig;
 use openremote_cloud::https::Http;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn config(cloud: &FakeCloud, name: &str) -> CloudConfig {
     CloudConfig {
@@ -109,7 +109,13 @@ async fn a_setting_and_a_bookmark_deletion_travel_between_two_devices() {
 
     // Deleting it on A removes it on B, and B's older state does not bring it
     // back: after the tombstone has landed, B stays without it.
-    let removed = call(&a, "POST", &format!("/browser/bookmarks/{id}/remove"), None).await;
+    let removed = call(
+        &a,
+        "POST",
+        &format!("/browser/bookmarks/{id}/remove"),
+        Some(json!({"request_id": "r-remove-old"})),
+    )
+    .await;
     assert_eq!(removed.status, 200, "{}", removed.raw);
     until("B to lose the deleted bookmark", || async {
         let state = browser_state(&b).await;
@@ -135,4 +141,97 @@ async fn a_setting_and_a_bookmark_deletion_travel_between_two_devices() {
             .is_some_and(|marks| marks.iter().all(|mark| mark["id"] != id)),
         "and it is gone where it was deleted"
     );
+}
+
+/// A bookmark written through the console's own route is read back there, and
+/// a delete takes it out of the list (the store keeps the tombstone, which is
+/// what the merge hon ours: browser/sync.rs pins that half).
+#[tokio::test]
+async fn a_bookmark_written_through_the_route_is_read_and_deleted_there() {
+    let daemon = common::start_daemon(&[]).await;
+    let saved = call(
+        &daemon,
+        "POST",
+        "/browser/bookmarks",
+        Some(json!({"request_id": "r-save", "url": "https://example.com/", "title": "Example"})),
+    )
+    .await;
+    assert_eq!(saved.status, 200, "raw: {}", saved.raw);
+    let id = saved.body["result"]["bookmark"]["id"]
+        .as_str()
+        .expect("a bookmark id")
+        .to_string();
+    let listed = call(&daemon, "GET", "/browser/bookmarks", None).await;
+    assert!(
+        listed.body["bookmarks"]
+            .as_array()
+            .is_some_and(|all| all.iter().any(|m| m["id"] == id.as_str())),
+        "raw: {}",
+        listed.raw
+    );
+    let removed = call(
+        &daemon,
+        "POST",
+        &format!("/browser/bookmarks/{id}/remove"),
+        Some(json!({"request_id": "r-remove"})),
+    )
+    .await;
+    assert_eq!(removed.status, 200, "raw: {}", removed.raw);
+    let after = call(&daemon, "GET", "/browser/bookmarks", None).await;
+    assert!(
+        after.body["bookmarks"]
+            .as_array()
+            .is_some_and(|all| all.iter().all(|m| m["id"] != id.as_str())),
+        "raw: {}",
+        after.raw
+    );
+}
+
+/// The console's route is the path a person's bookmark takes: saved on A, it
+/// arrives on B through the note, and deleting it on A removes it on B.
+#[tokio::test]
+async fn a_bookmark_saved_through_the_route_reaches_the_other_device() {
+    let cloud = FakeCloud::start().await;
+    let a = start_cloud_daemon(&[], Some(config(&cloud, "desk-a"))).await;
+    let b = start_cloud_daemon(&[], Some(config(&cloud, "desk-b"))).await;
+    let _id_a = sign_in(&a).await;
+    let _id_b = sign_in(&b).await;
+
+    let saved = call(
+        &a,
+        "POST",
+        "/browser/bookmarks",
+        Some(json!({"request_id": "r-save", "url": "https://example.com/", "title": "Example"})),
+    )
+    .await;
+    assert_eq!(saved.status, 200, "raw: {}", saved.raw);
+    let id = saved.body["result"]["bookmark"]["id"]
+        .as_str()
+        .expect("a bookmark id")
+        .to_string();
+    until("B to show the bookmark saved on A", || async {
+        let listed = call(&b, "GET", "/browser/bookmarks", None).await;
+        listed.body["bookmarks"]
+            .as_array()
+            .is_some_and(|all| all.iter().any(|m| m["id"] == id.as_str()))
+            .then_some(())
+    })
+    .await;
+
+    let removed = call(
+        &a,
+        "POST",
+        &format!("/browser/bookmarks/{id}/remove"),
+        Some(json!({"request_id": "r-remove"})),
+    )
+    .await;
+    assert_eq!(removed.status, 200, "raw: {}", removed.raw);
+    until("B to lose the deleted bookmark", || async {
+        let listed = call(&b, "GET", "/browser/bookmarks", None).await;
+        listed.body["bookmarks"]
+            .as_array()
+            .is_some_and(|all| all.iter().all(|m| m["id"] != id.as_str()))
+            .then_some(())
+    })
+    .await;
 }
