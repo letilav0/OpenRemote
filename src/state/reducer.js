@@ -136,6 +136,14 @@ export function mergeSessionIntoChat(existing, session) {
     decisionsList: existing.decisionsList,
     costUsd: existing.costUsd ?? 0,
     thinkingTokens: existing.thinkingTokens ?? 0,
+    // The parts behind those two totals: the baseline (what came before any
+    // turn this record folded, including turn 0 payloads from an older daemon)
+    // and one contribution per turn. A poll must keep them, or the next turn
+    // event would recompute the total from nothing and lose the history.
+    costBase: existing.costBase,
+    costTurns: existing.costTurns,
+    thinkingBase: existing.thinkingBase,
+    thinkingTurns: existing.thinkingTurns,
   }
   // A beat that says the session stopped running accounts for a turn end
   // the stream never delivered: a lost event, a socket that died mid-turn.
@@ -217,6 +225,34 @@ function retireLiveItems(chat, turn) {
       chat.timeline[i] = { kind: 'reasoning', id: item.id, turn: item.turn, text: item.text }
     }
   }
+}
+
+/// The running total is the baseline plus one contribution per turn.
+///
+/// `kind` is 'cost' or 'thinking'. A payload with a real turn owns its
+/// contribution: the same turn re-reported under a new seq replaces what it
+/// said, instead of adding again. A payload with turn 0 is an older daemon
+/// that did not say which turn, so its value is added to the baseline, exactly
+/// as every usage event was before the turn existed. A record folded before
+/// the parts existed carries only its total, which becomes the baseline on the
+/// first turn event so nothing already counted is dropped. The published
+/// fields (`costUsd`, `thinkingTokens`) stay the numbers the views read; the
+/// parts are internal to the record.
+function addTurnTotal(chat, kind, turn, value) {
+  const baseKey = kind === 'cost' ? 'costBase' : 'thinkingBase'
+  const turnsKey = kind === 'cost' ? 'costTurns' : 'thinkingTurns'
+  const totalKey = kind === 'cost' ? 'costUsd' : 'thinkingTokens'
+  const base = Number.isFinite(chat[baseKey])
+    ? chat[baseKey]
+    : Number.isFinite(chat[totalKey])
+      ? chat[totalKey]
+      : 0
+  const turns = { ...(chat[turnsKey] ?? {}) }
+  const real = Number.isInteger(turn) && turn > 0
+  if (real) turns[turn] = value
+  chat[baseKey] = real ? base : base + value
+  chat[turnsKey] = turns
+  chat[totalKey] = Object.values(turns).reduce((sum, n) => sum + n, chat[baseKey])
 }
 
 /// Fold one event into the chat. Events arrive in seq order; the timeline
@@ -343,12 +379,15 @@ export function foldEvent(chat, event) {
       break
     }
     case 'usage.cost': {
-      // The harness's own cost number for one turn, verbatim. The facts
-      // row shows the running total for the session. A payload that is
-      // not a finite number is skipped, not folded: 0 + undefined is
-      // NaN, and NaN would render as "$NaN" and survive every merge.
+      // The harness's own cost number for one turn, verbatim. The daemon says
+      // which turn it belongs to (0 means an older daemon did not say), so a
+      // turn re-reported under a new seq replaces its own contribution rather
+      // than adding again; a turn 0 payload is added, as it always was. A
+      // payload that is not a finite number is skipped, not folded: 0 +
+      // undefined is NaN, and NaN would render as "$NaN" and survive every
+      // merge.
       if (Number.isFinite(payload.cost_usd)) {
-        chat.costUsd = (chat.costUsd ?? 0) + payload.cost_usd
+        addTurnTotal(chat, 'cost', payload.turn, payload.cost_usd)
       }
       break
     }
@@ -384,11 +423,12 @@ export function foldEvent(chat, event) {
       break
     }
     case 'thinking.tokens': {
-      // The turn's thinking-token count, the harness's own number -
-      // the facts row shows the session's running total. Non-finite
-      // payloads are skipped for the same reason as the cost total.
+      // The turn's thinking-token count, the harness's own number, with the
+      // same rule as the cost: a real turn replaces its own contribution, a
+      // turn 0 payload is added. Non-finite payloads are skipped for the same
+      // reason as the cost total.
       if (Number.isFinite(payload.tokens)) {
-        chat.thinkingTokens = (chat.thinkingTokens ?? 0) + payload.tokens
+        addTurnTotal(chat, 'thinking', payload.turn, payload.tokens)
       }
       break
     }

@@ -1,33 +1,58 @@
-// What the cost and thinking-token counters can and cannot know. A usage event
-// carries no turn id (daemon/crates/openremote-core/src/events.rs:58-59, 84-85),
-// so the only identity it has is its seq: a replayed event is the same seq and
-// the fold drops it, while two different seqs always count, even when the
-// payloads are identical. That limit is pinned here so nobody assumes a turn
-// identity the wire does not carry.
+// The cost and thinking-token counters with the daemon's turn id
+// (daemon/crates/openremote-core/src/events.rs:63-68, 95-100). A turn's value
+// is its own contribution: re-reported under a new seq it replaces what it said
+// before instead of being added again. A payload with turn 0 is an older daemon
+// that did not say, so it is added as it always was. The shown totals keep their
+// names and stay numbers; the per-turn parts are internal to the record.
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { chatFromSession, foldEvent } from './state/reducer.js'
+import { chatFromSession, foldEvent, mergeSessionIntoChat } from './state/reducer.js'
 
 const session = (over = {}) => ({ id: 'c1', status: 'running', workspace: null, updated_at: 2000, ...over })
+const usage = (seq, turn, cost) => ({ type: 'usage.cost', seq, turn, cost_usd: cost })
+const think = (seq, turn, tokens) => ({ type: 'thinking.tokens', seq, turn, tokens })
 
-test('a replayed usage event counts once, and two seqs count as two turns', () => {
+test('one turn re-reported under a second seq counts once, and the later value wins', () => {
   const chat = chatFromSession(session())
-  // The same turn's usage delivered twice by a reconnect: the seq is the same,
-  // so the fold takes it once.
-  foldEvent(chat, { type: 'usage.cost', seq: 5, cost_usd: 0.4 })
-  foldEvent(chat, { type: 'usage.cost', seq: 5, cost_usd: 0.4 })
-  assert.equal(chat.costUsd, 0.4, 'a replayed frame does not add its cost again')
+  foldEvent(chat, usage(1, 1, 0.4))
+  foldEvent(chat, usage(2, 1, 0.25))
+  assert.equal(chat.costUsd, 0.25, 'the turn is replaced, not added again')
+  foldEvent(chat, think(3, 1, 40))
+  foldEvent(chat, think(4, 1, 25))
+  assert.equal(chat.thinkingTokens, 25)
+})
 
-  foldEvent(chat, { type: 'thinking.tokens', seq: 6, tokens: 42 })
-  foldEvent(chat, { type: 'thinking.tokens', seq: 6, tokens: 42 })
-  assert.equal(chat.thinkingTokens, 42, 'and does not add its thinking tokens again')
+test('two different turns add to each other', () => {
+  const chat = chatFromSession(session())
+  foldEvent(chat, usage(1, 1, 0.4))
+  foldEvent(chat, usage(2, 2, 0.1))
+  assert.equal(chat.costUsd, 0.5)
+  foldEvent(chat, think(3, 1, 40))
+  foldEvent(chat, think(4, 2, 2))
+  assert.equal(chat.thinkingTokens, 42)
+})
 
-  // A different seq is a different fold, and the console has no way to tell a
-  // genuinely new turn from the same turn re-reported under a new seq: that is
-  // the limit the daemon has to close with a turn id.
-  foldEvent(chat, { type: 'usage.cost', seq: 7, cost_usd: 0.4 })
-  foldEvent(chat, { type: 'thinking.tokens', seq: 8, tokens: 42 })
+test('a turn 0 payload (an older daemon that did not say) is added twice', () => {
+  const chat = chatFromSession(session())
+  foldEvent(chat, usage(1, 0, 0.4))
+  foldEvent(chat, usage(2, 0, 0.1))
+  assert.equal(chat.costUsd, 0.5, 'two turn 0 payloads add, as they always did')
+  foldEvent(chat, think(3, 0, 40))
+  foldEvent(chat, think(4, 0, 2))
+  assert.equal(chat.thinkingTokens, 42)
+  // And an unknown-turn payload does not disturb a real turn's contribution.
+  foldEvent(chat, usage(5, 1, 0.2))
+  foldEvent(chat, usage(6, 0, 0.1))
   assert.equal(chat.costUsd, 0.8)
-  assert.equal(chat.thinkingTokens, 84)
+})
+
+test('a chat that already carries a total keeps it and adds a new turn on top', () => {
+  const chat = chatFromSession(session())
+  foldEvent(chat, usage(1, 1, 0.4))
+  const merged = mergeSessionIntoChat(chat, session({ updated_at: 3000 }))
+  assert.equal(merged.costUsd, 0.4, 'the poll keeps the folded total')
+  foldEvent(merged, usage(2, 2, 0.1))
+  assert.equal(merged.costUsd, 0.5, 'and the next turn is added on top of it')
+  assert.equal(merged.thinkingTokens, 0)
 })
