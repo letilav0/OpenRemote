@@ -15,6 +15,7 @@ import {
   Copy,
   Desktop,
   DeviceMobile,
+  FolderSimple,
   GearSix,
   House,
   PushPin,
@@ -29,6 +30,7 @@ import {
   UserCircle,
   X,
 } from '@phosphor-icons/react'
+import PickerMenu from './PickerMenu.jsx'
 import { useConsole } from './state/console.jsx'
 import { chatStatus } from './state/reducer.js'
 import { attentionTitle, needsYou } from './needs-you.js'
@@ -124,6 +126,9 @@ export default function Sidebar({
   // and the panes that remove plugins cannot drift apart.
   const [armed, setArmed] = useState(null)
   const [menu, setMenu] = useState(null)
+  // The chat whose move is being picked for, and where the picker opens: the
+  // row menu is gone by then, so its press position is the anchor.
+  const [moving, setMoving] = useState(null)
   const [deleting, setDeleting] = useState(null)
   // The archive's way back. Archive is a hover button at the row's edge, so a
   // mispress otherwise costs a hunt through Settings > Archived chats that a
@@ -568,10 +573,46 @@ export default function Sidebar({
     write.then(() => setCopyNote(copiedLine(file))).catch((err) => setCopyNote(errorCopy(err)))
   }
 
+  // The projects a chat can be moved to: out of every project first, then this
+  // machine's projects. A chat's project is its folder, so the picker marks the
+  // one the chat is in, and the daemon is the one that decides whether the
+  // target is real.
+  const moveTargets = () => [
+    { id: 'none', name: 'No project' },
+    ...(projects ?? []).map((project) => ({ id: project.id, name: projectName(project) })),
+  ]
+
+  // Where the chat is now, for the picker's mark: the project holding its
+  // folder, or "none" when no project does.
+  const currentProject = (row) =>
+    (projects ?? []).find((project) => (project.folders ?? []).includes(row.workspace))?.id ?? 'none'
+
+  // Moving a chat: the daemon decides and answers, and this says what it said.
+  // A refusal keeps the daemon's own sentence, which names the reason (a turn
+  // in flight, a project that is gone) better than anything this file could.
+  const moveTo = async (id) => {
+    const row = moving?.row
+    setMoving(null)
+    if (!row) return
+    const project = id === 'none' ? null : id
+    const request_id = `move-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    try {
+      await api.call('POST', `/sessions/${row.id}/workspace`, {
+        request_id,
+        project_id: project,
+      })
+      const name = project ? projectName(projects.find((p) => p.id === project) ?? {}) : null
+      setCopyNote(name ? `Moved to ${name}.` : 'Moved out of its project.')
+    } catch (err) {
+      setCopyNote(errorCopy(err))
+    }
+  }
+
   // Right-click on a chat: the same actions as the hover buttons, plus the
   // split directions - the same four words the pane header and the main
-  // area's own menu use.
-  const menuItems = (row) => {
+  // area's own menu use. `at` is where the menu opened: the move picker opens
+  // there too, because the menu itself is gone by the time it is chosen.
+  const menuItems = (row, at = null) => {
     const split = (dir, before) => () => onSplit(row.id, dir, before)
     const canSplit = onSplit && !isMobile
     // Read once, so the label and the icon cannot disagree about the row.
@@ -611,6 +652,20 @@ export default function Sidebar({
             },
           ]
         : []),
+      // Moving a chat between projects is a fact the daemon keeps, not a view
+      // state: the row asks, the picker names the target, and the route does it.
+      // Only offered once the projects list has answered - before that the picker
+      // could only say "No project" and a move would be a guess.
+      ...(projectsAnswered
+        ? [
+            {
+              label: 'Move to project',
+              icon: <FolderSimple size={14} />,
+              onSelect: () => setMoving({ row, at }),
+            },
+          ]
+        : []),
+
       // Where the copy can work, and only there: a chat with nothing to write
       // here gets no row rather than one that answers "nothing to copy" after
       // a press. canCopyChat is the palette's rule as well.
@@ -694,7 +749,11 @@ export default function Sidebar({
         // transcript being in this window, and a transcript arriving while the
         // menu is open would otherwise insert a row and shift every later one
         // (the menu highlights by index), moving the target under the keyboard.
-        setMenu({ x: e.clientX, y: e.clientY, items: menuItems(row) })
+        setMenu({
+          x: e.clientX,
+          y: e.clientY,
+          items: menuItems(row, { x: e.clientX, y: e.clientY }),
+        })
       }}
     >
       <button
@@ -1203,6 +1262,20 @@ export default function Sidebar({
         // The menu's own rows, held from the moment it opened: see the
         // onContextMenu above for why they are not rebuilt here.
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+      )}
+      {moving && (
+        // The project picker the app already has, opened where the row's menu
+        // was: "No project" first, then this machine's projects, the chat's
+        // own marked. The daemon decides, and its words are what a failure
+        // shows.
+        <PickerMenu
+          label="Move to project"
+          items={moveTargets()}
+          selectedId={currentProject(moving.row)}
+          anchor={moving.at ?? undefined}
+          onChoose={moveTo}
+          onClose={() => setMoving(null)}
+        />
       )}
       {deleting && (
         <DeleteChatModal

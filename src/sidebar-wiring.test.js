@@ -144,10 +144,13 @@ test('a chat row offers Copy as Markdown where the copy can work', () => {
   // The item sits directly after Rename, and only where there is something to
   // write: a row that answered "nothing to copy" after a press is worse than
   // one that is not offered.
-  const menu = source.slice(source.indexOf('const menuItems = (row) => {'), source.indexOf('// The Mobile tile'))
+  const menu = source.slice(source.indexOf('const menuItems = (row, at = null) => {'), source.indexOf('// The Mobile tile'))
   const renameAt = menu.indexOf("label: 'Rename'")
   const copyAt = menu.indexOf("label: 'Copy as Markdown'")
-  assert.ok(renameAt > 0 && copyAt > renameAt, 'the copy follows Rename')
+  // Move to project sits between them now: both are still above the copy and
+  // the copy above the split rows.
+  const moveAt = menu.indexOf("label: 'Move to project'")
+  assert.ok(renameAt > 0 && moveAt > renameAt && copyAt > moveAt, 'the copy follows Rename and Move to project')
   assert.match(menu, /canCopyChat\(chats\?\.\[row\.id\]\)/, 'and is gated on the module rule')
   assert.ok(copyAt < menu.indexOf("label: 'Split right'"), 'the split order stays after it')
   assert.ok(copyAt < menu.indexOf("label: 'Archive'"))
@@ -168,7 +171,11 @@ test('a row menu keeps the items it opened with', () => {
   // would insert one in the middle and shift every later index, and the menu
   // moves its highlight by index - so the target would move under the
   // keyboard. The rows are built once, when the menu opens, and kept with it.
-  assert.match(source, /setMenu\(\{ x: e\.clientX, y: e\.clientY, items: menuItems\(row\) \}\)/)
+  assert.match(source, /items: menuItems\(row, \{ x: e\.clientX, y: e\.clientY \}\)/)
+  assert.match(source, /setMenu\(\{/)
+  assert.match(source, /x: e\.clientX,/)
+  assert.match(source, /y: e\.clientY,/)
+  assert.match(source, /items: menuItems\(row, \{ x: e\.clientX, y: e\.clientY \}\),/)
   assert.match(source, /items=\{menu\.items\}/, 'the menu draws the rows it was given')
   assert.doesNotMatch(source, /menuItems\(menu\.row\)/, 'the open menu never rebuilds its rows')
 })
@@ -237,4 +244,20 @@ test('the waiting lines are asked for in one pass, and one failure does not sink
   assert.doesNotMatch(effect, /for \(const row of missing\)/, 'no serial walk')
   // And the pass still stands down when the dependency changes under it.
   assert.match(effect, /if \(cancelled\) return/)
+})
+test('a chat row menu offers Move to project, and a refusal keeps the daemon words', () => {
+  // The row the menu carries, and the picker the app already has behind it:
+  // "No project" first, the current project marked, and the route as the only
+  // place a chat's project changes.
+  const at = source.indexOf('const menuItems = (row, at = null) => {')
+  assert.ok(at >= 0, 'the row menu takes the position the picker opens at')
+  const menu = source.slice(at, at + 5000)
+  assert.match(menu, /label: 'Move to project'/)
+  assert.match(menu, /onSelect: \(\) => setMoving\(\{ row, at \}\)/)
+  assert.match(source, /const moveTargets = \(\) => \[/)
+  assert.match(source, /\{ id: 'none', name: 'No project' \}/)
+  assert.match(source, /<PickerMenu[\s\S]{0,500}label="Move to project"/)
+  assert.match(source, /api\.call\('POST', `\/sessions\/\$\{row\.id\}\/workspace`/)
+  // A failure is the daemon's sentence, not a swallowed one.
+  assert.match(source, /catch \(err\) \{\s*setCopyNote\(errorCopy\(err\)\)/)
 })

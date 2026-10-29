@@ -132,7 +132,16 @@ spacing.
   its own row menu: its row moves to the top of its project's list (or of the
   Chats list, for one that belongs to no project) in the order the pins were
   made, newest first, and wears a pin mark; Unpin in the same menu puts it
-  back, and a pin whose chat is gone is simply not drawn.
+  back, and a pin whose chat is gone is simply not drawn. The same menu moves
+  a chat to another project: Move to project opens this machine's project
+  picker where the menu was, "No project" first and the chat's current project
+  marked, and the row rejoins the list under the project it went to once the
+  daemon has said so. A chat with a turn in flight is refused there and the
+  daemon's own sentence says why; a running chat whose turn is over restarts
+  its harness in the new folder, and the transcript keeps a line where it
+  moved. Whether the agent's own conversation continues depends on its harness:
+  one that finds its session record continues where it was, and one that does
+  not starts a fresh conversation in the new folder.
   The Mobile tile is the phones' status without words: green tile + black
   glyph while one is reachable, a hollow corner dot while away, quiet when
   there is none.
