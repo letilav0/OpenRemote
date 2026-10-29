@@ -96,7 +96,7 @@ function anchorOf(el) {
 
 // ---- the view ----
 
-export default function BrowserView({ onClosePane = null }) {
+export default function BrowserView({ onClosePane = null, askToShow = null }) {
   const { tabs, active, downloads, finds, closed, features } = useSyncExternalStore(subscribe, getState)
   const current = tabs.find((t) => t.key === active) ?? tabs[0]
   const pageRef = useRef(null)
@@ -471,6 +471,27 @@ export default function BrowserView({ onClosePane = null }) {
   const reopenRef = useRef(reopen)
   reopenRef.current = reopen
   useEffect(() => registerReopen(() => reopenRef.current()), [])
+
+  // A chat asked for the browser, or its agent opened a tab: show that tab, or open the
+  // address it named. The request arrives as a value (the shell owns it), so a repeat of
+  // the same request is a repeat of the same intent and is answered once per value.
+  const ask = useRef(null)
+  const goRef = useRef(null)
+  goRef.current = go
+  useEffect(() => {
+    if (!askToShow || askToShow === ask.current) return
+    ask.current = askToShow
+    if (askToShow.tab) {
+      const shown = getState().tabs.find((t) => t.native === askToShow.tab || t.key === askToShow.tab)
+      if (shown) setState((s) => ({ active: shown.key }))
+      return
+    }
+    if (askToShow.url) {
+      const fresh = newTab()
+      setState((s) => ({ tabs: [...s.tabs, fresh], active: fresh.key }))
+      requestAnimationFrame(() => goRef.current?.(askToShow.url))
+    }
+  }, [askToShow])
 
   const onNative = (command, extra = {}) => {
     const native = activeTab()?.native

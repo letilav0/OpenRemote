@@ -14,6 +14,7 @@ import AccountView from './AccountView.jsx'
 import MobileView from './MobileView.jsx'
 import MetricsView from './MetricsView.jsx'
 import BrowserPane from './BrowserPane.jsx'
+import { onBrowserRequest, openedKey, shouldAutoOpen } from './browser-placement.js'
 import FloatingBar from './FloatingBar.jsx'
 import { ConsoleProvider, useConsole } from './state/console.jsx'
 import { needsSignIn, sessionsForMode } from './cloud.js'
@@ -224,6 +225,20 @@ function Shell() {
   // closes without losing them.
   const [browserOpen, setBrowserOpen] = useState(false)
   const toggleBrowser = () => setBrowserOpen((v) => !v)
+  // A chat asking for the browser, and this shell answering: the panes are the shell's,
+  // so a chat (or its agent's tab) never needs to know the layout. The last request is
+  // kept so the pane can be told which tab or address to show.
+  const browserRequest = useRef(null)
+  const [browserAsk, setBrowserAsk] = useState(null)
+  useEffect(
+    () =>
+      onBrowserRequest((request) => {
+        browserRequest.current = request
+        setBrowserAsk(request)
+        setBrowserOpen(true)
+      }),
+    [],
+  )
   // The chat whose name is being changed. Renaming lives here, not in a view,
   // because two surfaces open the same dialog: the sidebar's row menu and the
   // command palette's row. `renaming` is the record the dialog opened on;
@@ -784,6 +799,35 @@ function Shell() {
   )
   useShortcut('toggle-sidebar', () => setSidebarOpen((v) => !v), desk)
   useShortcut('toggle-browser', toggleBrowser, desk)
+  // The agent of the chat in the primary pane opening a tab opens the browser beside it,
+  // showing that tab. Another chat's agent never steals the view: its tab carries its
+  // badge in the browser instead. A pane the person closed stays closed until the agent
+  // opens another tab, which is what `opened` remembers.
+  const primaryChat = useRef(null)
+  primaryChat.current = isChatView(view) ? view : null
+  useEffect(() => {
+    if (!hasTauri || isMobile) return undefined
+    const opened = new Set()
+    let stop = null
+    let gone = false
+    import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen('browser:tab', ({ payload }) => {
+          if (!shouldAutoOpen(payload, primaryChat.current, opened)) return
+          opened.add(openedKey(payload))
+          browserRequest.current?.({ chatId: payload.controller.chat, tab: payload.id, focus: false })
+        }),
+      )
+      .then((unlisten) => {
+        if (gone) unlisten()
+        else stop = unlisten
+      })
+      .catch(() => {})
+    return () => {
+      gone = true
+      stop?.()
+    }
+  }, [])
   useShortcut('toggle-mode', () => switchMode(mode === 'local' ? 'cloud' : 'local'), desk)
   useShortcut('split-right', () => setLayout((l) => splitLeaf(l, l.focus, 'row')), desk)
   useShortcut('split-down', () => setLayout((l) => splitLeaf(l, l.focus, 'col')), desk)
@@ -1130,7 +1174,7 @@ function Shell() {
               {/* The browser docked right: beside the chat, never instead
                   of it. The floating bar (on the homepage) and the sidebar
                   open and close it. */}
-              {browserOpen && <BrowserPane onClose={() => setBrowserOpen(false)} />}
+              {browserOpen && <BrowserPane onClose={() => setBrowserOpen(false)} askToShow={browserAsk} />}
             </div>
           </main>
           {paneMenu && (

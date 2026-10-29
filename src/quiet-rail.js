@@ -2,6 +2,16 @@
 // quiet row, not a log of every call. Pending decisions stay, because
 // the person has to answer them.
 
+import { browserTool, isBrowserTool } from './browser-tools.js'
+
+/// How one tool call reads in that row. The browser's tools say what they did to a page
+/// ("Browser · read page") rather than the MCP name they arrive under, which is the one
+/// place a person meets the agent's browser work.
+function toolLabel(tool) {
+  if (!isBrowserTool(tool?.name)) return tool?.name
+  return browserTool(tool.name, tool.input).label
+}
+
 /// Consecutive reasoning and tool items become one work row. Everything
 /// the person reads (their message, the reply, a note, a question that
 /// is still waiting) stays where it is.
@@ -33,14 +43,15 @@ export function workLabel(items, live) {
   const thinking = items.some((item) => item.kind === 'reasoning' || item.kind === 'reasoning-stream')
   if (live) {
     const running = tools.find((item) => item.result == null)
-    if (running) return running.name
+    if (running) return toolLabel(running)
     if (thinking) return 'Thinking…'
     return 'Working…'
   }
   if (tools.length === 0) return 'Thought'
   const names = []
   for (const tool of tools) {
-    if (!names.includes(tool.name)) names.push(tool.name)
+    const name = toolLabel(tool)
+    if (!names.includes(name)) names.push(name)
   }
   if (names.length <= 3) return names.join(', ')
   return `${tools.length} steps`

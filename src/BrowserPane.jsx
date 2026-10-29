@@ -8,11 +8,11 @@ import { Suspense, lazy } from 'react'
 // Loaded on first opening: the browser costs nothing until it is shown.
 const BrowserView = lazy(() => import('./BrowserView.jsx'))
 
-export default function BrowserPane({ onClose }) {
+export default function BrowserPane({ onClose, askToShow = null }) {
   return (
     <aside className="bw-pane" aria-label="Browser">
       <Suspense fallback={null}>
-        <BrowserView onClosePane={onClose} />
+        <BrowserView onClosePane={onClose} askToShow={askToShow} />
       </Suspense>
     </aside>
   )
