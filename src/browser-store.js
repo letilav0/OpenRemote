@@ -6,10 +6,46 @@
 
 import { hasTauri, isMobile } from './platform.js'
 import { insertAfter, newTab, popupBelongs } from './browser-tabs.js'
+import { bookmarkFor, inFolder, positionAt, stepPosition, withBookmark, withoutBookmark } from './browser-bookmarks.js'
+
+// Bookmarks stay on this device: they live in this store and in this
+// console's own localStorage, never in the account, because bookmarks are a
+// reading record of one person at one keyboard and nothing here is synced.
+const BOOKMARKS_KEY = 'openremote-browser-bookmarks'
+
+function loadBookmarks() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) ?? '{"marks":[]}')
+    if (!Array.isArray(raw?.marks)) return []
+    return raw.marks.filter((m) => m && typeof m.url === 'string' && m.url)
+  } catch {
+    return []
+  }
+}
+
+function storeBookmarks(marks) {
+  try {
+    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify({ v: 1, marks }))
+  } catch {
+    // No storage: the list still lives for this window.
+  }
+}
+
+function newBookmarkId() {
+  return `bm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
 
 let state = (() => {
   const first = newTab()
-  return { tabs: [first], active: first.key, closed: [], downloads: [], finds: {}, features: null }
+  return {
+    tabs: [first],
+    active: first.key,
+    closed: [],
+    downloads: [],
+    finds: {},
+    features: null,
+    bookmarks: loadBookmarks(),
+  }
 })()
 const listeners = new Set()
 const keyHandlers = new Set()
@@ -67,6 +103,62 @@ export function subscribe(fn) {
 
 export function patchTab(key, change) {
   setState((s) => ({ tabs: s.tabs.map((t) => (t.key === key ? { ...t, ...change } : t)) }))
+}
+
+// ---- bookmarks (this device only) ----
+
+// Adds the page to a folder, or updates the bookmark that already holds the
+// address (one address is one row on the bar). Returns the saved bookmark.
+export function saveBookmark({ url, title = '', folder = 'bar', id = '' } = {}) {
+  if (!url) return null
+  const before = getState().bookmarks
+  const clean = String(title ?? '').trim()
+  const to = folder === 'other' ? 'other' : 'bar'
+  const existing = bookmarkFor(before, url)
+  const marks = existing
+    ? before.map((m) => (m.id === existing.id ? { ...m, title: clean || m.title, folder: to } : m))
+    : withBookmark(before, {
+        id: id || newBookmarkId(),
+        url,
+        title: clean,
+        folder: to,
+        position: positionAt(inFolder(before, to), Number.MAX_SAFE_INTEGER),
+      })
+  setState(() => ({ bookmarks: marks }))
+  storeBookmarks(marks)
+  return marks.find((m) => m.url === url) ?? null
+}
+
+export function updateBookmark(id, change = {}) {
+  const before = getState().bookmarks
+  const next = before.map((m) =>
+    m.id === id
+      ? {
+          ...m,
+          ...change,
+          title: String(change.title ?? m.title ?? '').trim(),
+          folder: change.folder === 'other' ? 'other' : change.folder === 'bar' ? 'bar' : m.folder,
+        }
+      : m,
+  )
+  setState(() => ({ bookmarks: next }))
+  storeBookmarks(next)
+}
+
+export function removeBookmark(id) {
+  const next = withoutBookmark(getState().bookmarks, id)
+  setState(() => ({ bookmarks: next }))
+  storeBookmarks(next)
+}
+
+// One step up or down the bookmark's own folder, stopped at the ends.
+export function moveBookmark(id, step) {
+  const marks = getState().bookmarks
+  const mark = marks.find((m) => m.id === id)
+  if (!mark) return
+  const position = stepPosition(marks, mark, step)
+  if (position == null) return
+  updateBookmark(id, { position })
 }
 
 export async function call(command, args) {

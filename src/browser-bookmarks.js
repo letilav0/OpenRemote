@@ -1,0 +1,99 @@
+// Bookmarks' small rules: the two folders Chrome has (the bar and Other
+// bookmarks), their order, where a new bookmark lands, what a bookmark with
+// no name is drawn as, and what pressing the star on the current address
+// means. A bookmark is { id, url, title, folder, position }; positions are
+// numbers, so a move writes only the bookmark that moved. Pure: tested
+// without a DOM, and no account anywhere - bookmarks stay on this device.
+
+export const FOLDERS = { bar: 'Bookmarks bar', other: 'Other bookmarks' }
+
+export function folderOf(mark) {
+  return mark?.folder === 'other' ? 'other' : 'bar'
+}
+
+export function sortBookmarks(marks) {
+  return [...(marks ?? [])].sort(
+    (a, b) =>
+      (folderOf(a) === folderOf(b) ? 0 : folderOf(a) === 'bar' ? -1 : 1) ||
+      (a.position ?? 0) - (b.position ?? 0) ||
+      String(a.id).localeCompare(String(b.id)),
+  )
+}
+
+// One folder's bookmarks, in order.
+export function inFolder(marks, folder) {
+  return sortBookmarks((marks ?? []).filter((m) => folderOf(m) === folder))
+}
+
+export function bookmarkFor(marks, url) {
+  if (!url) return null
+  return (marks ?? []).find((m) => m.url === url) ?? null
+}
+
+export function isBookmarked(marks, url) {
+  return bookmarkFor(marks, url) !== null
+}
+
+// The name a bookmark is drawn by: the one it was given, or the address
+// without its scheme and trailing slash. A bookmark that was never named is
+// still a bookmark, never an empty chip on the bar.
+export function labelFor(mark) {
+  const title = String(mark?.title ?? '').trim()
+  if (title) return title
+  return String(mark?.url ?? '')
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/$/, '')
+}
+
+// The position that puts a bookmark at `index` in a folder's list (the list
+// without the bookmark being moved): between its new neighbours.
+export function positionAt(list, index) {
+  const before = list[index - 1]?.position
+  const after = list[index]?.position
+  if (before == null && after == null) return 1
+  if (before == null) return after - 1
+  if (after == null) return before + 1
+  return (before + after) / 2
+}
+
+// A bookmark moved one step up or down its folder: its new position, or null
+// when it is already at that end.
+export function stepPosition(marks, mark, step) {
+  const list = inFolder(marks, folderOf(mark))
+  const at = list.findIndex((m) => m.id === mark.id)
+  const to = at + step
+  if (at === -1 || to < 0 || to >= list.length) return null
+  const rest = list.filter((m) => m.id !== mark.id)
+  return positionAt(rest, to)
+}
+
+// The bookmark the star on this address should open, or the one it should
+// add. `existing` means the address is already kept: the star then edits that
+// bookmark instead of making a second copy, which is what Chrome does and
+// what keeps one address one row on the bar.
+export function starFor(marks, { url, title = '', folder = 'bar', id = '' } = {}) {
+  if (!url) return null
+  const existing = bookmarkFor(marks, url)
+  if (existing) return { existing: true, mark: existing }
+  return {
+    existing: false,
+    mark: {
+      id,
+      url,
+      title: String(title ?? '').trim(),
+      folder: folderOf({ folder }),
+      position: positionAt(inFolder(marks, folderOf({ folder })), Number.MAX_SAFE_INTEGER),
+    },
+  }
+}
+
+// The list with `mark` added, or replacing the bookmark that shares its id
+// (an edit keeps its place on the bar).
+export function withBookmark(marks, mark) {
+  const rest = (marks ?? []).filter((m) => m.id !== mark.id)
+  return [...rest, mark]
+}
+
+export function withoutBookmark(marks, id) {
+  return (marks ?? []).filter((m) => m.id !== id)
+}
