@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict'
+import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   SECTIONS,
@@ -98,9 +98,13 @@ test('the dynamic rows are built from the lists the view draws, not a name list'
   )
   // One row per archived chat, so a chat's own title finds it.
   assert.equal(searchSettings('nightly', base)[0]?.key, 'archived-s1')
-  // The archived actions exist only while something is archived.
-  assert.ok(searchSettings('restore an archived chat', base).length > 0)
-  assert.deepEqual(searchSettings('restore an archived chat', withData({ archived: [] })), [])
+  // The archived actions exist only while something is archived. The pin is
+  // the archived section's own rows: another section's prose can fuzzy-match
+  // the same letters, and that is not an archived row answering.
+  const archivedRowsFor = (q, over) =>
+    searchSettings(q, withData(over)).filter((e) => e.section === 'archived')
+  assert.ok(archivedRowsFor('restore an archived chat', {}).length > 0)
+  assert.deepEqual(archivedRowsFor('restore an archived chat', { archived: [] }), [])
   // No data, no dynamic rows at all.
   assert.deepEqual(dynamicEntries({}), [])
 })
@@ -136,8 +140,11 @@ test('every query that should find nothing still finds nothing', () => {
   // A word no row carries, even split into words that exist: "key" alone matches,
   // but "key zzzxq" must not, because every word has to match the same row.
   assert.equal(searchSettings('key zzzxq', index).length, 0)
-  // Restored is not archived: nothing to find when the list is empty.
-  assert.deepEqual(searchSettings('nightly', withData({ archived: [] })), [])
+  // Restored is not archived: no archived row answers when the list is empty.
+  assert.equal(
+    searchSettings('nightly', withData({ archived: [] })).filter((e) => e.section === 'archived').length,
+    0,
+  )
 })
 
 test('no row is indexed twice, with or without data', () => {

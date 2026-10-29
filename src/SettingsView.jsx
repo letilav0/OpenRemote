@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   Archive,
   CaretLeft,
   CaretRight,
   Cloud,
+  Globe,
   Info,
   Keyboard as KeyboardIcon,
   MagnifyingGlass,
@@ -27,7 +28,8 @@ import Toggle from './Toggle.jsx'
 import { SECTIONS, SETTING_GROUPS, SETTINGS_ENTRIES, dynamicEntries, resultToOpen, searchSettings, visibleSections } from './settings-search.js'
 import { projectName } from './projects.js'
 import { chatTitle } from './shape.js'
-import { armRow, clearRow } from './row-confirm.js'
+import { armRow, clearRow, rowIsArmed } from './row-confirm.js'
+import { call as callShell, clearHistory, getState as getBrowserState, removeBookmark, subscribe as subscribeBrowser } from './browser-store.js'
 import { useBack } from './use-back.js'
 import { useConsole } from './state/console.jsx'
 import { signedIn } from './cloud.js'
@@ -72,6 +74,7 @@ const SECTION_ICONS = {
   harnesses: Robot,
   'mcp-servers': Plugs,
   models: Shapes,
+  browser: Globe,
   archived: Archive,
   'this-install': Info,
 }
@@ -453,6 +456,38 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
   const armedProjectName = armedProject
     ? projectName((projectsList ?? []).find((p) => p.id === armedProject))
     : null
+  // The browser's own answers to "what is kept here": its store already holds
+  // the bookmarks, the reading record and the download ledger on this
+  // computer, so the section reads that store rather than a second copy. The
+  // armed row is the same rule as the project's (one press to ask, one to
+  // act), and the note carries the store's own words when an action finishes.
+  const browserStore = useSyncExternalStore(subscribeBrowser, getBrowserState)
+  const [armedBrowser, setArmedBrowser] = useState(null)
+  const [browserNote, setBrowserNote] = useState(null)
+  const bookmarkCount = browserStore.bookmarks.length
+  const historyCount = browserStore.history.length
+  const downloadCount = (browserStore.downloads ?? []).length
+  const lastDownload = (browserStore.downloads ?? []).find((d) => d.path) ?? null
+  // Clearing reads the store's own functions: the reading record has one
+  // clear (its own), and a bookmark is removed by the same call the bar's
+  // editor uses, so neither rule is restated here.
+  const clearTheHistory = () => {
+    clearHistory()
+    setArmedBrowser(clearRow())
+    setBrowserNote('History cleared.')
+  }
+  const clearTheBookmarks = () => {
+    for (const mark of getBrowserState().bookmarks) removeBookmark(mark.id)
+    setArmedBrowser(clearRow())
+    setBrowserNote('Bookmarks cleared.')
+  }
+  // The shell's own call, the one the pane's download row makes: it reveals a
+  // downloaded file in its folder. A download is not cleared from here, so the
+  // row only shows the newest one where it already is.
+  const showLastDownload = () => {
+    if (!lastDownload) return
+    callShell('browser_reveal', { path: lastDownload.path })
+  }
   const panelRef = useRef(null)
   const searchRef = useRef(null)
   const shortcutSearchRef = useRef(null)
@@ -1615,6 +1650,157 @@ export default function SettingsView({ onReplay, onOpenChat, onClose = null, onM
                     />
                   </div>
                 ))
+            )}
+          </section>
+        )}
+
+        {!isMobile && (
+          <section
+            className="stg-section"
+            id="stg-browser"
+            role="tabpanel"
+            aria-labelledby="stg-tab-browser"
+            data-stg="browser"
+            hidden={!!query || active !== 'browser'}
+          >
+            <header className="stg-head">
+              <h2 className="stg-title">Browser</h2>
+              <p className="stg-lead">
+                What the built-in browser keeps on this computer, and where to take it
+                back. Nothing here is sent anywhere.
+              </p>
+            </header>
+            {/* The facts first: each names what is kept and where it lives, so
+                a person can find out before they find the buttons. */}
+            <div className="pn-list pn-list--tight">
+              <div className="pn-row" data-stg="browser-bookmarks">
+                <div>
+                  <div className="pn-name">Bookmarks</div>
+                  <div className="pn-detail">
+                    {bookmarkCount} kept on this computer, in this console. Nothing
+                    is sent anywhere.
+                  </div>
+                </div>
+              </div>
+              <div className="pn-row" data-stg="browser-history">
+                <div>
+                  <div className="pn-name">Pages read</div>
+                  <div className="pn-detail">
+                    {historyCount} in this window's reading record, on this computer
+                    only. A private tab is never recorded.
+                  </div>
+                </div>
+              </div>
+              <div className="pn-row" data-stg="browser-profile">
+                <div>
+                  <div className="pn-name">Cookies and site data</div>
+                  {/* No button: the shell clears site data for the tab you are
+                      on, so this is a fact about where it lives rather than an
+                      action that would do nothing from here. */}
+                  <div className="pn-detail">
+                    The profile the browser's tabs share on this computer: cookies,
+                    site data, cache and service workers. It is cleared per site
+                    from the browser's own menu, where the shell has the tab to
+                    clear.
+                  </div>
+                </div>
+              </div>
+              <div className="pn-row" data-stg="browser-downloads">
+                <div>
+                  <div className="pn-name">Downloads</div>
+                  <div className="pn-detail">
+                    {downloadCount} file{downloadCount === 1 ? '' : 's'} the tabs
+                    saved, in your Downloads folder. The list is the browser's own
+                    Downloads page, which needs the browser open.
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="pn-list pn-list--tight">
+              <div className="pn-row" data-stg="browser-history-clear">
+                <div>
+                  <div className="pn-name">Clear history</div>
+                  <div className="pn-detail">Empties this window's reading record. It asks once.</div>
+                </div>
+                {rowIsArmed(armedBrowser, 'browser-history-clear') ? (
+                  <button
+                    type="button"
+                    className="pn-btn pn-btn--danger"
+                    onClick={clearTheHistory}
+                    onBlur={() => setArmedBrowser(clearRow())}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        e.preventDefault()
+                        setArmedBrowser(clearRow())
+                      }
+                    }}
+                  >
+                    Clear it
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="pn-btn"
+                    disabled={historyCount === 0}
+                    title={historyCount === 0 ? 'Nothing has been read in this window yet.' : undefined}
+                    onClick={() => setArmedBrowser((current) => armRow(current, 'browser-history-clear'))}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <div className="pn-row" data-stg="browser-bookmarks-clear">
+                <div>
+                  <div className="pn-name">Clear bookmarks</div>
+                  <div className="pn-detail">Removes every kept page. It asks once.</div>
+                </div>
+                {rowIsArmed(armedBrowser, 'browser-bookmarks-clear') ? (
+                  <button
+                    type="button"
+                    className="pn-btn pn-btn--danger"
+                    onClick={clearTheBookmarks}
+                    onBlur={() => setArmedBrowser(clearRow())}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        e.preventDefault()
+                        setArmedBrowser(clearRow())
+                      }
+                    }}
+                  >
+                    Clear them
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="pn-btn"
+                    disabled={bookmarkCount === 0}
+                    title={bookmarkCount === 0 ? 'Nothing is kept yet.' : undefined}
+                    onClick={() => setArmedBrowser((current) => armRow(current, 'browser-bookmarks-clear'))}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <div className="pn-row" data-stg="browser-downloads-open">
+                <div>
+                  <div className="pn-name">Show the last download</div>
+                  <div className="pn-detail">Opens the folder of the newest finished download.</div>
+                </div>
+                <button
+                  type="button"
+                  className="pn-btn"
+                  disabled={!lastDownload}
+                  title={lastDownload ? lastDownload.path : 'No download has finished yet.'}
+                  onClick={showLastDownload}
+                >
+                  Show
+                </button>
+              </div>
+            </div>
+            {browserNote && (
+              <p className="stg-note" role="status">
+                {browserNote}
+              </p>
             )}
           </section>
         )}

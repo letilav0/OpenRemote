@@ -131,10 +131,16 @@ spacing.
   there is none.
 - **Settings is a window over the app:** a sidebar with a settings search
   and one tab per section, grouped General (New tasks, Appearance, Startup,
-  Keyboard), System (Cloud, Daemon, Harnesses, MCP servers, Models), Chats
-  (Archived chats), and About (This install). Only the selected section fills the
-  right pane, its rows in hairline groups rather than floating cards. Phone
-  width stacks the search and a horizontal tab strip above the pane.
+  Keyboard), System (Cloud, Daemon, Harnesses, MCP servers, Models, Browser),
+  Chats (Archived chats), and About (This install). Only the selected section
+  fills the right pane, its rows in hairline groups rather than floating cards.
+  Phone width stacks the search and a horizontal tab strip above the pane.
+  The Browser section is where a person finds out what the built-in browser
+  keeps on this computer (bookmarks, the pages read, the profile with its
+  cookies and site data, downloads) and takes it back: its facts name where
+  each lives, Clear history and Clear bookmarks ask once, and anything the
+  shell can only do for the tab you are on says so in the row instead of
+  offering a button that would do nothing from here.
 - **Main canvas:** one view at a time; views are flat lists/cards, not
   dashboards.
 - **Panes (the split view), modelled on VS Code's editor groups:**

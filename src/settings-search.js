@@ -32,6 +32,7 @@ export const SECTIONS = [
   { id: 'harnesses', label: 'Harnesses', icon: 'robot', group: 'system', phone: false },
   { id: 'mcp-servers', label: 'MCP servers', icon: 'plugs', group: 'system', phone: false },
   { id: 'models', label: 'Models', icon: 'shapes', group: 'system', phone: false },
+  { id: 'browser', label: 'Browser', icon: 'globe', group: 'system', phone: false },
   { id: 'archived', label: 'Archived chats', icon: 'archive', group: 'chats', phone: true },
   { id: 'this-install', label: 'This install', icon: 'info', group: 'about', phone: true },
 ]
@@ -48,6 +49,7 @@ const BLURBS = {
   harnesses: 'What the daemon can drive on this machine.',
   'mcp-servers': 'Tools a session can call.',
   models: 'Custom model endpoints on this computer, which a chat can run through.',
+  browser: 'What the built-in browser keeps on this computer, and where to clear it.',
   archived: 'Chats hidden on this computer.',
   'this-install': 'The build you are running and the first-run steps.',
 }
@@ -91,6 +93,19 @@ const ROWS = [
 
   row('install-version', 'this-install', 'OpenRemote version', 'The build and the daemon it talks to.', ['about', 'build', 'release', 'update', 'daemon']),
   row('install-first-run', 'this-install', 'First-run steps', 'Shows them again. The chats stay.', ['onboarding', 'setup', 'replay', 'welcome']),
+
+  // The built-in browser keeps four things on this computer. The facts come
+  // first so a person can find out what is kept before they find the buttons
+  // that take it back; each row says where the thing lives, and the two that
+  // can only be cleared from the browser itself say so rather than offering a
+  // button that would do nothing from here.
+  row('browser-bookmarks', 'browser', 'Bookmarks', 'Pages kept on this computer, in this console. Nothing is sent anywhere.', ['bookmark', 'bookmarks', 'favourites', 'saved', 'star', 'kept', 'where', 'where kept']),
+  row('browser-history', 'browser', 'Pages read', "This window's reading record, on this computer only. A private tab is never recorded.", ['history', 'visited', 'pages', 'reading', 'record', 'private', 'where']),
+  row('browser-profile', 'browser', 'Cookies and site data', "The profile the browser's tabs share: cookies, site data, cache and service workers. Cleared per site from the browser's own menu.", ['cookies', 'cookie', 'site data', 'storage', 'cache', 'profile', 'sign out', 'clear']),
+  row('browser-downloads', 'browser', 'Downloads', 'Files the tabs saved, in your Downloads folder. The list is the browser\'s own Downloads page.', ['downloads', 'download', 'files', 'saved', 'folder', 'where']),
+  row('browser-history-clear', 'browser', 'Clear history', "Empties this window's reading record. It asks once.", ['history', 'clear', 'delete', 'empty', 'forget', 'visited', 'erase']),
+  row('browser-bookmarks-clear', 'browser', 'Clear bookmarks', 'Removes every kept page. It asks once.', ['bookmarks', 'bookmark', 'clear', 'remove', 'delete', 'empty', 'favourites']),
+  row('browser-downloads-open', 'browser', 'Show the last download', 'Opens the folder of the newest finished download.', ['downloads', 'download', 'open', 'show', 'reveal', 'folder', 'file']),
 ]
 
 const KEYBOARD = ACTIONS.map((a) =>
@@ -103,8 +118,15 @@ const KEYBOARD = ACTIONS.map((a) =>
   ),
 )
 
+// A section can be found by more than its own name: the words a person types
+// for what lives inside it are the section's too, so "cookies" reaches the
+// Browser tab before it reaches a row inside it.
+const SECTION_TERMS = {
+  browser: ['history', 'cookies', 'bookmarks', 'downloads', 'clear', 'profile'],
+}
+
 // The section's own result points at the tab's element (data-stg="<id>").
-const SECTION_ROWS = SECTIONS.map((s) => row(s.id, s.id, s.label, BLURBS[s.id] ?? '', [s.id]))
+const SECTION_ROWS = SECTIONS.map((s) => row(s.id, s.id, s.label, BLURBS[s.id] ?? '', [s.id, ...(SECTION_TERMS[s.id] ?? [])]))
 
 export const SETTINGS_ENTRIES = [...SECTION_ROWS, ...ROWS, ...KEYBOARD]
 
