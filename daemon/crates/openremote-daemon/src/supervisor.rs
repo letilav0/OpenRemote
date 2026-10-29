@@ -2355,7 +2355,11 @@ impl Supervisor {
                 self.emit_all(id, vec![EventPayload::ReasoningDelta { turn, text }])?;
             }
             DriverEvent::ThinkingTokens { tokens } => {
-                self.emit_all(id, vec![EventPayload::ThinkingTokens { tokens }])?;
+                // The turn this number belongs to, from the same fold the
+                // turn-scoped siblings above read: it lets a reader replace a
+                // re-reported turn's tally instead of adding to it.
+                let turn = self.current_turn(id);
+                self.emit_all(id, vec![EventPayload::ThinkingTokens { tokens, turn }])?;
             }
             DriverEvent::ToolStarted { name, input, .. } => {
                 let turn = self.current_turn(id);
@@ -2440,7 +2444,10 @@ impl Supervisor {
                 self.emit_all(id, vec![EventPayload::ContextUsed { used, window }])?;
             }
             DriverEvent::TurnCost { cost_usd } => {
-                self.emit_all(id, vec![EventPayload::UsageCost { cost_usd }])?;
+                // Same turn identity as the thinking tokens, so money and
+                // tokens are replaced per turn together.
+                let turn = self.current_turn(id);
+                self.emit_all(id, vec![EventPayload::UsageCost { cost_usd, turn }])?;
             }
             DriverEvent::Compacted => {
                 // The harness compacted its own conversation - the
