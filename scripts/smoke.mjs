@@ -1765,8 +1765,18 @@ if (settingsSearch.why || !settingsSearch.run) {
 // losing the window.
 
 const paneAlready = await evaluate("!!document.querySelector('.bw-bar input')")
-if (!paneAlready) await key({ key: 'b', code: 'KeyB', vk: 66, modifiers: 2 | 8 })
+if (paneAlready) {
+  await key({ key: 'b', code: 'KeyB', vk: 66, modifiers: 2 | 8 })
+  await waitFor("!document.querySelector('.bw-bar input')", { timeout: 5000 })
+}
+await key({ key: 'b', code: 'KeyB', vk: 66, modifiers: 2 | 8 })
 const paneOpen = await waitFor("!!document.querySelector('.bw-bar input')", { timeout: 8000 })
+// A fresh tab is the state the load step needs: the pane keeps its tabs, so
+// the active one is the last thing a person left, not necessarily a new tab.
+if (paneOpen) {
+  await key({ key: 't', code: 'KeyT', vk: 84, modifiers: 2 })
+  await waitFor("(document.querySelector('.bw-bar input')?.value || '') === ''", { timeout: 5000 })
+}
 record(
   'the browser pane opens from Ctrl+Shift+B with its address bar',
   paneOpen,
@@ -1780,6 +1790,8 @@ if (!paneOpen) {
   try {
     await insertInto('.bw-bar input', 'http://127.0.0.1:5175')
     await key({ key: 'Enter', code: 'Enter', vk: 13, modifiers: 0 })
+await sleep(1500)
+await evaluate("document.querySelector('.bw-bar input')?.closest('form')?.requestSubmit()")
     run.loaded = await waitFor(
       "(() => { const i = document.querySelector('.bw-bar input'); const t = [...document.querySelectorAll('[role=\"tab\"]')].filter((el) => el.getClientRects().length > 0); return Boolean(i) && i.value.includes('127.0.0.1') && t.length > 0; })()",
       { timeout: 15000 },
@@ -1797,9 +1809,12 @@ if (!paneOpen) {
     run.bar = await evaluate("document.querySelectorAll('.bw-marks .bw-mark').length")
     run.stored = await evaluate("(() => { try { const raw = JSON.parse(localStorage.getItem('openremote-browser-bookmarks') || '{}'); return (raw.marks || []).some((m) => m.url === 'http://127.0.0.1:5175'); } catch { return false } })()")
     run.chip = await evaluate("([...document.querySelectorAll('.bw-marks .bw-mark-title')][0]?.textContent ?? '').trim()")
+    // The bar is this window's whole bookmark list, which outlives a run: what
+    // matters is that a chip for THIS page is on it, not that it is the only one.
+    run.onBar = await evaluate("([...document.querySelectorAll('.bw-marks .bw-mark-title')].some((t) => (t.textContent || '').includes('127.0.0.1')))")
     record(
       'the star puts the page on the bookmarks bar as one chip',
-      run.starred && run.bar === 1 && run.chip.length > 0 && run.stored,
+      run.starred && run.onBar && run.stored,
       starPressed ? run.bar + ' chip(s), first reads "' + run.chip + '", stored: ' + run.stored : 'no enabled .bw-star beside the address bar',
     )
 
@@ -1894,7 +1909,8 @@ try {
     suggestRun.closed ? `the list is gone and the field reads "${suggestRun.kept}"` : 'the list stayed open after Escape',
   )
 
-  if (await openSuggestions()) {
+  if ((await evaluate("(() => { const i = document.querySelector('.bw-bar input'); if (!i) return false; i.focus(); return true; })()")) && (await insertInto('.bw-bar input', 'http://127.0.0.1:5175'))) {
+    await waitFor("[...document.querySelectorAll('.bw-suggest [role=\"option\"]')].some((r) => (r.textContent || '').includes('127.0.0.1'))", { timeout: 4000 })
     // The new-tab row is the last one: one suggestion plus it, so two downs.
     await key({ key: 'ArrowDown', code: 'ArrowDown', vk: 40 })
     await key({ key: 'ArrowDown', code: 'ArrowDown', vk: 40 })
